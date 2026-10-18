@@ -7,7 +7,8 @@
     <link rel="stylesheet" href="/static/overlay.css">
   </head>
   <body>
-    <!-- 票据面板：外框由 CSS 绘制，顶部/底部装饰带固定，中间名单区随人数延伸。 -->
+    <!-- 主题图文件名保留 shorekeeper-queue-frame.png，与 web_server.c 白名单一致，便于免编译替换素材。
+         框体用 border-image 切片：顶部/底部固定，中间条带随人数垂直延伸。 -->
     <main class="queue-module">
       <section class="queue-safe-area">
         <div id="queue" class="queue" aria-live="polite"></div>

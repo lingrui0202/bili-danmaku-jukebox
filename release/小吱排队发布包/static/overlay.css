@@ -2,9 +2,10 @@
   color-scheme: dark;
   --font-size: 36px;
 
-  /* ===== 票据面板参数 =====
-     竖版面板固定为 宽:高 = 2:3，上下装饰带高度固定，中间名单区占用剩余高度；
-     外框完全由 CSS 绘制（无图片素材），人数放不下时名单循环滚动。 */
+  /* ===== 主题图参数（原图 936 × 548）=====
+     竖版面板固定为 宽:高 = 2:3，上下装饰固定，中间名单区占用剩余高度；
+     人数放不下时名单循环滚动，面板尺寸始终不变。 */
+  --frame-url: url("/static/assets/shorekeeper-queue-frame.png");
   --s: 1; /* 缩放系数 = 面板宽 / 936，由 overlay.js 动态设置 */
 
   /* 名单区左右留白：与主题图票据内区（原图 x113–852）对齐 */
@@ -60,50 +61,19 @@ body {
   transform: translate(-50%, -50%);
 }
 
-/* 外框层：纯 CSS 绘制的票据皮肤（顶部装饰带 284、底部装饰带 248，
-   中间随面板高度延伸）。透明度由 --frame-opacity 控制，不影响名单文字。 */
+/* 外框层：单独拆出，透明度由 --frame-opacity 控制，不影响名单文字 */
 .queue-module::before {
   content: "";
   position: absolute;
   inset: 0;
   z-index: 0;
   pointer-events: none;
-  border: calc(var(--s) * 3px) solid rgba(255, 226, 242, 0.72);
-  border-radius: calc(var(--s) * 26px);
-  background:
-    repeating-linear-gradient(
-      135deg,
-      rgba(255, 255, 255, 0.035) 0 2px,
-      rgba(255, 255, 255, 0) 2px 12px
-    ),
-    linear-gradient(
-      180deg,
-      rgba(74, 31, 63, 0.97) 0,
-      rgba(55, 22, 46, 0.96) calc(var(--s) * 284px),
-      rgba(40, 15, 33, 0.94) calc(var(--s) * 284px + 1px),
-      rgba(40, 15, 33, 0.94) calc(100% - var(--s) * 248px),
-      rgba(46, 17, 38, 0.97) 100%
-    );
-  box-shadow:
-    0 calc(var(--s) * 8px) calc(var(--s) * 26px) rgba(23, 4, 16, 0.45),
-    inset 0 0 calc(var(--s) * 30px) rgba(255, 142, 196, 0.12),
-    inset 0 1px 0 rgba(255, 255, 255, 0.18);
-  opacity: var(--frame-opacity, 1);
-}
-
-/* 金色分隔线：顶带底边 / 底带顶边 */
-.queue-module::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  pointer-events: none;
-  border-radius: calc(var(--s) * 26px);
-  background:
-    linear-gradient(90deg, transparent, rgba(224, 151, 71, 0.9), transparent)
-      0 calc(var(--s) * 284px) / 100% calc(var(--s) * 2px) no-repeat,
-    linear-gradient(90deg, transparent, rgba(224, 151, 71, 0.9), transparent)
-      0 calc(100% - var(--s) * 248px) / 100% calc(var(--s) * 2px) no-repeat;
+  border-style: solid;
+  border-width: calc(var(--s) * 284px) 0 calc(var(--s) * 248px) 0;
+  border-image-source: var(--frame-url);
+  border-image-slice: 284 0 248 0 fill;
+  border-image-width: 1;
+  border-image-repeat: stretch stretch;
   opacity: var(--frame-opacity, 1);
 }
 
