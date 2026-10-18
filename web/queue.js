@@ -5,7 +5,7 @@
   let lastRevision = null;
   let failedRefreshes = 0;
 
-  const IMG_W = 936;         // 面板基准宽度（用于计算缩放系数 --s）
+  const IMG_W = 936;         // 主题图原始宽度（缩放系数 --s = 面板宽 / 936）
   const SCROLL_SPEED = 28;   // 滚动速度：像素/秒
   const NAME_MIN_RATIO = 0.55; // 名字最小可缩到基准字号的 55%，再放不下才省略
 
@@ -80,15 +80,13 @@
 
   function render(state) {
     document.documentElement.style.setProperty("--font-size", `${state.font_size}px`);
-    // 面板整体透明度与名单透明度分开调节，分别由管理页两个滑动条控制
-    document.documentElement.style.setProperty("--panel-opacity", (state.frame_opacity ?? 100) / 100);
+    // 外框（票据背景）与名单文字透明度分开调节，分别由管理页两个滑动条控制
+    document.documentElement.style.setProperty("--frame-opacity", (state.frame_opacity ?? 100) / 100);
     document.documentElement.style.setProperty("--name-opacity", (state.name_opacity ?? 100) / 100);
     // Polling returns the same state every 500ms. Rebuilding unchanged rows would
     // restart their entrance animation and make names bounce continuously.
     if (state.revision !== lastRevision) {
       lastRevision = state.revision;
-      const countEl = document.getElementById("queue-count");
-      if (countEl) countEl.textContent = state.queue.length;
       const maxRows = Number(state.max_rows || 50);
       queue.replaceChildren(...state.queue.slice(0, maxRows).map((item) => {
         const row = document.createElement("div");
