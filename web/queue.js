@@ -88,7 +88,7 @@
     if (state.revision !== lastRevision) {
       lastRevision = state.revision;
       const maxRows = Number(state.max_rows || 50);
-      queue.replaceChildren(...state.queue.slice(0, maxRows).map((item) => {
+      const rows = state.queue.slice(0, maxRows).map((item) => {
         const row = document.createElement("div");
         row.className = "queue-row";
         row.dataset.id = item.id;
@@ -111,7 +111,15 @@
           row.append(tag);
         }
         return row;
-      }));
+      });
+      const hidden = state.queue.length - maxRows;
+      if (hidden > 0) { // 超过渲染上限时给出提示，避免“人被静默吞掉”
+        const more = document.createElement("div");
+        more.className = "queue-row more";
+        more.textContent = `还有 ${hidden} 人等待`;
+        rows.push(more);
+      }
+      queue.replaceChildren(...rows);
       fitNames();
       updateScrolling();
     }

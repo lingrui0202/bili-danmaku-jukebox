@@ -23,7 +23,7 @@ def is_frozen() -> bool:
 
 
 def _project_root() -> str:
-    """只读资源根：config.yaml / web/ 等随包分发的数据。
+    """只读资源根：web/ 等随包分发的静态数据。
 
     打包为单文件 exe 时，这些数据被解包到 sys._MEIPASS；未打包时取项目根。
     """
@@ -33,22 +33,74 @@ def _project_root() -> str:
 
 
 PROJECT_ROOT = _project_root()
-CONFIG_PATH = os.path.join(PROJECT_ROOT, "config.yaml")
+
+_DATA_DIR_CACHE: Optional[str] = None
+
+
+def _writable(path: str) -> bool:
+    """目录是否可写（尝试创建 + 写探针文件）。"""
+    try:
+        os.makedirs(path, exist_ok=True)
+        probe = os.path.join(path, ".write_probe")
+        with open(probe, "w", encoding="utf-8") as f:
+            f.write("1")
+        os.remove(probe)
+        return True
+    except Exception:
+        return False
 
 
 def app_data_dir() -> str:
     """可写数据根：cache/ 等运行时生成文件。
 
-    未打包时取项目根（开发/测试一致）；打包后放「原始 exe 所在目录」，
-    使设置与播放列表在多次运行间持久化（_MEIPASS 临时目录不可写）。
+    未打包时取项目根（开发/测试一致）；打包后优先放「原始 exe 所在目录」，
+    该目录不可写（如 Program Files）时回退到 %LOCALAPPDATA%/bili-jukebox。
     """
+    global _DATA_DIR_CACHE
+    if _DATA_DIR_CACHE:
+        return _DATA_DIR_CACHE
     if is_frozen():
         exe = sys.argv[0] if sys.argv and os.path.isabs(sys.argv[0]) else sys.executable
-        return os.path.dirname(os.path.abspath(exe))
-    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        base = os.path.dirname(os.path.abspath(exe))
+        if _writable(base):
+            _DATA_DIR_CACHE = base
+            return base
+        fallback = os.path.join(
+            os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "bili-jukebox"
+        )
+        os.makedirs(fallback, exist_ok=True)
+        _DATA_DIR_CACHE = fallback
+        return fallback
+    _DATA_DIR_CACHE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return _DATA_DIR_CACHE
+
+
+def _resolve_config_path() -> str:
+    """config.yaml 路径。
+
+    未打包：项目根；打包后：优先 exe 同级 config.yaml（用户可编辑），
+    不存在时把内置默认导出一份到该位置；导出失败则直接读内置默认。
+    """
+    bundled = os.path.join(PROJECT_ROOT, "config.yaml")
+    if not is_frozen():
+        return bundled
+    user_cfg = os.path.join(app_data_dir(), "config.yaml")
+    if os.path.exists(user_cfg):
+        return user_cfg
+    try:
+        import shutil
+
+        shutil.copyfile(bundled, user_cfg)
+        return user_cfg
+    except Exception:
+        return bundled
+
+
+CONFIG_PATH = _resolve_config_path()
 
 DEFAULTS: dict[str, Any] = {
-    "server": {"host": "0.0.0.0", "port": 8788, "open_browser": True},
+    # 默认只监听本机：OBS / 管理页都在本机访问，避免同网络下他人操作服务
+    "server": {"host": "127.0.0.1", "port": 8788, "open_browser": True},
     "danmaku": {"mode": "mock", "room_id": 0, "credential_file": ""},
     "jukebox": {
         "request_enabled": False,     # 点歌功能默认关闭，主播在管理页手动开启

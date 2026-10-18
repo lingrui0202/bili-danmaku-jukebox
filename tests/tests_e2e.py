@@ -12,7 +12,9 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tests.common import start_server, stop_server, restart_server, get, post, run_tests
+from tests.common import (
+    start_server, stop_server, restart_server, get, post, run_tests, enable_requests,
+)
 
 _proc = None
 
@@ -72,11 +74,14 @@ def test_cache_stats():
 # ---------------- 冷却 / 上限 ----------------
 
 def test_user_cooldown():
+    # 基线配置默认无冷却，用例内显式设置 30 秒并自行恢复
+    post("/api/settings", {"patch": {"jukebox": {"user_cooldown_seconds": 30}}})
     r1 = post("/api/mock-danmu", {"text": "点歌 demo 光辉岁月", "uid": 100})
     assert r1.get("ok"), f"第一次点歌应成功: {r1}"
     r2 = post("/api/mock-danmu", {"text": "点歌 demo 稻香", "uid": 100})
     assert not r2.get("ok"), "冷却期内第二次点歌应被拒绝"
     assert "太频繁" in r2.get("msg", ""), f"应为冷却提示: {r2}"
+    post("/api/settings", {"patch": {"jukebox": {"user_cooldown_seconds": 0}}})
 
 
 def test_max_per_user_queue():
@@ -153,6 +158,7 @@ if __name__ == "__main__":
     post("/api/settings", {"patch": {"jukebox": {"keep_state_on_exit": False}}})
     _proc = restart_server(_proc)
     post("/api/settings/reset", {})
+    enable_requests()  # 「恢复默认」会关闭点歌，这里重新开启
     # 仅用 demo 源，保证离线确定性
     post("/api/settings", {"patch": {"sources": {"active": ["demo"]}}})
     _reset()

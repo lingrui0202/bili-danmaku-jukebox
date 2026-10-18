@@ -287,6 +287,49 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="B站弹幕点歌机", lifespan=lifespan)
 
+_LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+def _origin_allowed(origin: str, request: Optional[Request] = None, host_header: str = "") -> bool:
+    """同源校验：只放行本机页面，或与本次请求 Host 相同的页面（局域网自用）。"""
+    from urllib.parse import urlparse
+
+    try:
+        host = (urlparse(origin).hostname or "").lower()
+    except Exception:
+        return False
+    if not host:
+        return False
+    if host in _LOCAL_HOSTS:
+        return True
+    if request is not None and (request.url.hostname or "").lower() == host:
+        return True
+    if host_header:
+        hh = host_header
+        if hh.startswith("["):          # IPv6：[::1]:8788
+            hh = hh.split("]")[0].lstrip("[")
+        elif ":" in hh:                 # IPv4/域名：192.168.1.5:8788
+            hh = hh.rsplit(":", 1)[0]
+        if host == hh.lower():
+            return True
+    return False
+
+
+@app.middleware("http")
+async def _same_origin_guard(request: Request, call_next):
+    """拦截跨站写操作：浏览器带了 Origin 且不是本机/自身来源 → 403。
+
+    命令行/OBS 等非浏览器客户端不带 Origin，照常放行。
+    """
+    if request.method in ("POST", "PUT", "PATCH", "DELETE"):
+        origin = request.headers.get("origin")
+        if origin is not None and not _origin_allowed(origin, request=request):
+            return JSONResponse(
+                {"ok": False, "msg": "请求来源不受信任，已拒绝（防盗链式跨站调用）"},
+                status_code=403,
+            )
+    return await call_next(request)
+
 
 class NoCacheMiddleware:
     """纯 ASGI 中间件：页面与常规接口禁用缓存，升级 exe 后浏览器/OBS 拿到的永远是新页面。
@@ -374,6 +417,19 @@ def _queue_index(body: dict) -> Optional[int]:
         except Exception:
             pass
     return None
+
+
+def _sanitize_overlay(overlay: dict) -> dict:
+    """设置覆盖层脱敏：登录 Cookie 不回传明文，只标记是否已登录。"""
+    o = copy.deepcopy(overlay or {})
+    srcs = o.get("sources")
+    if isinstance(srcs, dict):
+        for name in ("bilibili", "qq", "kugou", "netease"):
+            sub = srcs.get(name)
+            if isinstance(sub, dict):
+                sub["cookie"] = ""
+                sub["has_cookie"] = bool((overlay.get("sources") or {}).get(name, {}).get("cookie"))
+    return o
 
 
 def _public_config(cfg: dict) -> dict:
@@ -548,7 +604,7 @@ async def api_get_settings():
     return {
         "ok": True,
         "config": _public_config(state.cfg),
-        "overlay": state.settings.data,
+        "overlay": _sanitize_overlay(state.settings.data),
         "config_file": CONFIG_PATH,
         "port": int(state.cfg["server"]["port"]),
         "note": "管理页修改只写入 cache/settings.json，不影响 config.yaml；「恢复默认」清空覆盖层",
@@ -893,6 +949,10 @@ async def api_stream(request: Request, source: str = "", id: str = ""):
 
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket):
+    origin = ws.headers.get("origin")
+    if origin is not None and not _origin_allowed(origin, host_header=ws.headers.get("host", "")):
+        await ws.close(code=1008)  # policy violation：拒绝跨站页面订阅状态
+        return
     await state.ws.connect(ws)
     try:
         await ws.send_text(

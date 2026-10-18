@@ -27,9 +27,9 @@ _SPLIT_RE = re.compile(r"([,;:/|\s\-+.，；：、。—])")
 
 _Help = (
     "命令列表：add-名字[-位置] 手动加人/移位 | del-序号 删除 | next 或 下一位 叫号 | "
-    "list 列表 | clear 清空 | match-文本 测试口令 | contents-a,b,c 设置内容关键词 | "
-    "keywords-a,b,c 设置入队口令 | font-36 字号 | frame-80 / name-80 透明度 | "
-    "priority-on/off 插队开关 | autoclear-on/off 开播清空 | "
+    "list 列表 | clear 清空队列 | clear-pending 清空待用灯牌 | match-文本 测试口令 | "
+    "contents-a,b,c 设置内容关键词 | keywords-a,b,c 设置入队口令 | font-36 字号 | "
+    "frame-80 / name-80 透明度 | priority-on/off 插队开关 | autoclear-on/off 开播清空 | "
     "test-queue-名字[,内容] / test-gift-名字 本地测试 | help 帮助"
 )
 
@@ -247,7 +247,7 @@ class LiveQueue:
             return None
         gid = str(uid) if uid else "name:" + str(uname or "匿名")
         ok, msg = self.gift(gid, str(uname or "观众"))
-        return msg
+        return msg or None
 
     # ---------- 核心操作 ----------
 
@@ -295,9 +295,9 @@ class LiveQueue:
         return True, f"{rname} 已加入第 {len(self.queue)} 位{suffix}"
 
     def gift(self, id_: str, name: str) -> tuple[bool, str]:
-        gift_label = self.gift_names[0] if self.gift_names else "灯牌"
         if not self.priority_enabled:
-            return False, f"已取消插队，忽略 {name} 的{gift_label}"
+            return False, ""  # 已关闭插队：静默忽略礼物，避免每条都刷提示
+        gift_label = self.gift_names[0] if self.gift_names else "灯牌"
         index = next((i for i, q in enumerate(self.queue) if str(q.get("id")) == id_), -1)
         if index < 0:
             index = self._unique_queue_by_name(name)
@@ -371,6 +371,12 @@ class LiveQueue:
         self.queue.clear()
         self._changed()
         return True, f"已清空 {n} 位用户"
+
+    def clear_pending(self) -> tuple[bool, str]:
+        n = len(self.pending)
+        self.pending.clear()
+        self._changed()
+        return True, f"已清空 {n} 条待用灯牌记录"
 
     # ---------- 管理命令 ----------
 
@@ -464,12 +470,16 @@ class LiveQueue:
             self.priority_enabled = False
             self._changed()
             gift_label = self.gift_names[0] if self.gift_names else "灯牌"
-            return True, f"已取消插队：{gift_label} 不再插队，也不记录资格", True
+            return True, f"已取消插队：{gift_label} 不再插队，也不记录资格（已积累的待用记录会保留）", True
         if low == "priority-on":
             self.priority_enabled = True
             self._changed()
             gift_label = self.gift_names[0] if self.gift_names else "灯牌"
             return True, f"已恢复插队：{gift_label} 可插到第 1 位", True
+
+        if low in ("clear-pending", "清空待用"):
+            ok, msg = self.clear_pending()
+            return ok, msg, True
 
         if low == "clear":
             ok, msg = self.clear()

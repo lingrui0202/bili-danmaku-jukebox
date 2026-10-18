@@ -11,7 +11,9 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tests.common import start_server, stop_server, restart_server, get, post, run_tests
+from tests.common import (
+    start_server, stop_server, restart_server, get, post, run_tests, enable_requests,
+)
 
 _proc = None
 
@@ -32,7 +34,7 @@ def test_settings_get():
     r = get("/api/settings")
     assert r.get("ok"), f"settings GET 失败: {r}"
     cfg = r["config"]
-    assert cfg["jukebox"]["user_cooldown_seconds"] == 30, "默认用户冷却应为 30"
+    assert cfg["jukebox"]["user_cooldown_seconds"] == 0, "基线配置默认无冷却（0 秒）"
     assert r["port"] == 8788, "端口应为 8788"
     assert cfg.get("sources_logged_in") is not None, "应有登录态标记"
     assert cfg["sources"]["qq"].get("cookie", "") == "", "Cookie 不应明文回传"
@@ -54,8 +56,9 @@ def test_settings_post():
 def test_settings_reset():
     post("/api/settings/reset", {})
     cfg = get("/api/settings")["config"]
-    assert cfg["jukebox"]["user_cooldown_seconds"] == 30, "reset 后应回到默认 30"
+    assert cfg["jukebox"]["user_cooldown_seconds"] == 0, "reset 后应回到基线配置（默认无冷却）"
     assert cfg["jukebox"]["allow_user_skip"] is False
+    enable_requests()  # 恢复默认会关闭点歌
 
 
 # ---------------- 音源开关与排序 ----------------
@@ -182,6 +185,7 @@ def test_lyric():
 
 def _setup_keep_state_false():
     post("/api/settings/reset", {})
+    enable_requests()
     post("/api/settings", {"patch": {"jukebox": {"keep_state_on_exit": False}}})
     _reset()
     post("/api/mock-danmu", {"text": "点歌 demo 海阔天空", "uid": 21})
@@ -216,6 +220,7 @@ if __name__ == "__main__":
     post("/api/settings", {"patch": {"jukebox": {"keep_state_on_exit": False}}})
     _proc = restart_server(_proc)  # 重启 → clear_state，得到干净起点
     post("/api/settings/reset", {})  # 恢复默认设置（keep_state 默认 true）
+    enable_requests()                # 恢复默认会关闭点歌，测试内重新开启
     _reset()
 
     failed = run_tests(

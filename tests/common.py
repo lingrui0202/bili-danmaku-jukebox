@@ -55,6 +55,14 @@ def _wait_ready(timeout: int = 40) -> bool:
     return False
 
 
+def enable_requests() -> None:
+    """开启弹幕点歌（产品默认关闭；「恢复默认设置」后需要重新开启）。"""
+    try:
+        post("/api/settings", {"patch": {"jukebox": {"request_enabled": True}}})
+    except Exception:
+        pass
+
+
 def start_server() -> subprocess.Popen:
     """启动服务并等待就绪。"""
     kill_port()
@@ -69,6 +77,8 @@ def start_server() -> subprocess.Popen:
     if not _wait_ready():
         proc.kill()
         raise RuntimeError("服务启动超时，请查看 tests/server_test.log")
+    # 点歌默认关闭：测试统一开启，保持既有用例语义
+    enable_requests()
     return proc
 
 

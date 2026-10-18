@@ -170,6 +170,16 @@ body {
   animation: none; /* 复制出来的行不再播放入场动画 */
 }
 
+/* 超过渲染上限的提示行 */
+.queue-row.more {
+  justify-content: center;
+  border-style: dashed;
+  background: rgba(255, 255, 255, 0.045);
+  color: rgba(255, 226, 242, 0.8);
+  font-size: 0.62em;
+  letter-spacing: 0.08em;
+}
+
 .queue-row:nth-child(even) {
   border-color: var(--row-even-border);
   background: var(--row-even-bg);

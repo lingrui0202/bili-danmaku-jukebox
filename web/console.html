@@ -506,6 +506,10 @@
     </div>
     <div class="card">
       <h3>&#127881; 先送灯牌的用户（待用资格）</h3>
+      <div class="row" style="margin-bottom:8px;justify-content:space-between">
+        <span class="tip" style="margin:0">送过优先礼物但还没发「排队」的用户，入队时自动消耗 1 次</span>
+        <button class="btn ghost sm" onclick="lqClearPending()">清空待用</button>
+      </div>
       <div class="list" id="lq-pending-list"><div class="tip">暂无记录</div></div>
     </div>
   </div>
@@ -1166,6 +1170,10 @@
     lqCmd("clear");
   };
   window.lqRefresh = function () { fetchLiveQueue(); };
+  window.lqClearPending = function () {
+    if (!confirm("确定清空待用灯牌记录？（不影响当前队列）")) return;
+    lqCmd("clear-pending");
+  };
   window.lqMatch = function () {
     var v = $("lq-match").value.trim();
     if (!v) { toast("请输入要测试的弹幕内容"); return; }

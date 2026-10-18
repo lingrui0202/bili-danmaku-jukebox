@@ -126,6 +126,7 @@ OBS 名单页特性：小吱主题的票据式竖版面板（2:3），上下装�
 无框架脚本式测试，每个脚本独立运行（服务由脚本内子进程启动/停止，端口 **8788**）：
 
 ```bash
+python tests/tests_live_queue.py           # 直播排队：口令/灯牌插队/命令/持久化（纯单元，离线）
 python tests/tests_regression_sources.py   # 6 源 search/resolve 回归（联网）
 python tests/tests_edge_cases.py           # LRC/weapi/wav/local/网易云 边界（联网）
 python tests/tests_login_qr.py             # 四平台二维码生成与轮询（联网）
@@ -148,9 +149,11 @@ python -m PyInstaller build.spec --noconfirm   # 或双击 build.bat
 
 产物 `dist/bili-jukebox.exe` 是单个文件，直接发给别人即可运行：
 
-- 首次运行会在 **exe 同目录** 生成 `cache/`（`settings.json` 设置、播放列表都在这里，多次运行保留）；
+- 首次运行会在 **exe 同目录** 生成 `cache/`（`settings.json` 设置、排队记录、播放列表）与 `config.yaml`；
+- `config.yaml` 就在 exe 旁边，**可以直接编辑**（改完重启生效），不用再动源码；
+- 同一时间只允许一个实例：重复双击会直接打开已在运行的管理页，避免重复入队/双播；
 - 建议把 exe 放到一个**有写入权限的普通文件夹**（如桌面、Downloads），不要放系统保护目录；
-- 启动后控制台会打印三个页面地址；浏览器打开 `控制台` 即用。
+- 启动后控制台会打印页面地址；浏览器打开「管理控制台」即用。
 
 > 资源打包说明：`web/` 与 `config.yaml` 由 `jukebox/config.py` 的 `_project_root()`
 > 在运行时从 PyInstaller 解包目录（`sys._MEIPASS`）定位；可写缓存目录由 `app_data_dir()`
@@ -160,11 +163,25 @@ python -m PyInstaller build.spec --noconfirm   # 或双击 build.bat
 
 ## 7. 配置说明（config.yaml）
 
+`config.yaml` 位置：源码运行 → 项目根目录；exe 运行 → **exe 同目录**（首次运行自动生成）。
+
+- `server.host`：默认 `127.0.0.1`（仅本机可访问）。
 - `server.port`：**硬性 8788**，不要改。
 - `danmaku.mode`：`mock` / `live`。
+- `jukebox.request_enabled`：点歌总开关，默认 `false`，管理页「设置」可一键开启。
 - `jukebox`：点歌前缀、冷却、队列上限、黑名单、保留播放列表等。
+- `live_queue`：排队口令、可打内容关键词、优先礼物名、名单行数上限。
 - `sources.active`：启用的音源及优先级顺序。
 - `cache.search_ttl_minutes`：搜索结果缓存时长。
+
+---
+
+## 7.5 安全说明
+
+- **默认只监听 127.0.0.1**：管理页、OBS 页面都只在本机可用，同网络的其他设备无法操作。
+- 需要手机/平板遥控时，把 `server.host` 改成 `0.0.0.0` 后重启；此时同网络设备可打开管理页，**本程序没有登录密码**，请只在可信网络使用。
+- `/api/settings` 不会返回 Cookie 明文（只标记是否已登录），避免凭据被其它程序读取。
+- 所有写操作会校验请求来源：来自其它网站的跨站请求一律拒绝（403），WebSocket 同样校验。
 
 ---
 

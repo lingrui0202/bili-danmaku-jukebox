@@ -182,6 +182,48 @@ def _port_free(port: int) -> bool:
     return True
 
 
+_MUTEX_HANDLE = None
+
+
+def _acquire_single_instance() -> bool:
+    """命名互斥锁：防止重复启动（两个实例会共用 cache、重复入队、重复播放）。"""
+    if sys.platform != "win32":
+        return True
+    global _MUTEX_HANDLE
+    try:
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32  # type: ignore
+        handle = kernel32.CreateMutexW(None, False, "Local\\bili-jukebox-single-instance")
+        if not handle:
+            return True  # 拿不到锁句柄时不阻断启动
+        if kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+            kernel32.CloseHandle(handle)
+            return False
+        _MUTEX_HANDLE = handle  # 进程存活期间一直持有
+        return True
+    except Exception:
+        return True
+
+
+def _open_running_instance(base_port: int) -> bool:
+    """已有实例在运行：探测其端口并打开管理页。"""
+    import urllib.request
+    import webbrowser
+
+    for p in range(base_port, base_port + 20):
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{p}/api/state", timeout=0.6) as r:
+                if r.status == 200:
+                    url = f"http://127.0.0.1:{p}/web/console.html"
+                    webbrowser.open(url, new=1)
+                    print(f"[info] 程序已在运行，已为你打开管理页：{url}")
+                    return True
+        except Exception:
+            continue
+    return False
+
+
 def main() -> None:
     _install_console_handler()
     _install_parent_watchdog()
@@ -197,6 +239,11 @@ def main() -> None:
 
     host = cfg["server"]["host"]
     base_port = int(cfg["server"]["port"])
+
+    if not _acquire_single_instance():
+        if not _open_running_instance(base_port):
+            print("[warn] 程序已有实例在运行（未找到其端口），本次启动已取消。")
+        return
 
     port = base_port
     while port < base_port + 20:
