@@ -14,9 +14,9 @@ dist/
 __pycache__/
 *.pyc
 
-# 小吱排队工具（C 版）本地存档：保留在本地，不进入公开仓库
-queue-overlay/
-release/
+# 小吱排队工具（C 版）存档的编译产物
+queue-overlay/build/*.obj
+queue-overlay/build/*.o
 
 # 编辑器/系统
 .playwright-cli/

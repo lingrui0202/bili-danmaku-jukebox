@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>小吱排队工具 · 控制台</title>
+    <link rel="stylesheet" href="/static/control.css">
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">BILIBILI LIVE · OBS QUEUE</p>
+          <h1>小吱排队工具</h1>
+        </div>
+        <div id="connection" class="connection"><i></i><span>正在连接</span></div>
+      </header>
+
+      <section class="stats">
+        <article><span>直播间</span><strong id="roomId">—</strong></article>
+        <article><span>当前排队</span><strong id="queueCount">0</strong></article>
+        <article><span>待用灯牌</span><strong id="pendingCount">0</strong></article>
+        <article><span>已叫号</span><strong id="servedCount">0</strong></article>
+        <article><span>监听口令</span><strong id="keyword">排队</strong></article>
+        </section>
+
+      <div class="grid">
+        <section class="panel queue-panel">
+          <div class="panel-head">
+            <div><p class="label">LIVE LIST</p><h2>当前队列</h2></div>
+            <div class="head-actions">
+              <button id="nextUser" class="primary" type="button">下一位</button>
+              <button id="refresh" class="ghost" type="button">刷新</button>
+            </div>
+          </div>
+          <div id="queueList" class="queue-list"><p class="empty">暂无排队用户</p></div>
+        </section>
+
+        <aside class="stack">
+          <section class="panel room-panel">
+            <p class="label">LIVE ROOM</p>
+            <h2>直播间</h2>
+            <div class="command-row room-row">
+              <input id="roomInput" autocomplete="off" placeholder="直播间号，或直接粘贴直播间链接">
+              <button id="roomApply" type="button">切换</button>
+            </div>
+            <p class="hint">切换后会立即重连（约 10 秒生效），并写入 config.json，下次启动仍用这个直播间。</p>
+          </section>
+
+          <section class="panel contents-panel">
+            <p class="label">CONTENTS</p>
+            <h2>可打内容</h2>
+            <div class="command-row">
+              <input id="contentsInput" autocomplete="off" placeholder="通行正义,轨外,高危">
+              <button id="contentsApply" type="button">保存</button>
+            </div>
+            <p class="hint">观众发「排队，轨外」时会记录要打的内容；逗号分隔多个关键词，保存后写入 config.json。</p>
+          </section>
+
+          <section class="panel qr-panel">
+            <p class="label">LOGIN</p>
+            <div class="setting-title">
+              <h2>B 站登录</h2>
+              <span id="loginState" class="login-state">匿名</span>
+            </div>
+            <div id="qrBox" class="qr-box">
+              <div id="qrCanvas" class="qr-canvas"></div>
+              <p id="qrHint" class="hint">匿名连接时 B 站可能只给脱敏昵称（例如「你***」）。扫码登录后可获取完整用户名。</p>
+            </div>
+            <div class="test-actions">
+              <button id="qrBegin" type="button">生成二维码</button>
+              <button id="qrLogout" type="button" class="danger ghost">退出登录</button>
+            </div>
+          </section>
+
+          <section class="panel command-panel">
+            <p class="label">COMMAND</p>
+            <h2>快捷操作</h2>
+            <form id="commandForm">
+              <label for="command">输入控制命令</label>
+              <div class="command-row">
+                <input id="command" autocomplete="off" placeholder="例如 add-你好-3 或 del-3">
+                <button type="submit">执行</button>
+              </div>
+            </form>
+            <div class="quick-actions">
+              <button data-fill="add-">＋ 手动加人</button>
+              <button data-fill="del-">－ 删除名次</button>
+              <button data-command="list">查看列表</button>
+              <button data-command="clear" class="danger">清空队列</button>
+            </div>
+            <div id="result" class="result" role="status">等待命令</div>
+          </section>
+
+          <section class="panel settings-panel">
+            <p class="label">APPEARANCE</p>
+            <div class="setting-title"><h2>OBS 字体大小</h2><output id="fontOutput">36px</output></div>
+            <input id="fontSize" type="range" min="12" max="160" step="1" value="36">
+            <p class="hint">拖动后会立即同步到 OBS 浏览器源。</p>
+
+            <div class="setting-title"><h2>OBS 外框透明度</h2><output id="frameOpacityOutput">100%</output></div>
+            <input id="frameOpacity" type="range" min="0" max="100" step="1" value="100">
+            <p class="hint">只调外框（票据背景）的透明度，不影响名单文字。</p>
+
+            <div class="setting-title"><h2>OBS 名单透明度</h2><output id="nameOpacityOutput">100%</output></div>
+            <input id="nameOpacity" type="range" min="0" max="100" step="1" value="100">
+            <p class="hint">只调观众名字（名单文字）的透明度，不影响外框。</p>
+
+            <div class="setting-title switch-row">
+              <h2>取消插队</h2>
+              <label class="switch" title="开启后灯牌不再让人插队">
+                <input id="priorityToggle" type="checkbox">
+                <span></span>
+              </label>
+            </div>
+            <p class="hint">开启后观众送「<span id="giftName">粉丝团灯牌</span>」不再插队，也不记录待用资格；关闭即恢复插队。</p>
+
+            <div class="setting-title switch-row">
+              <h2>开播自动清空</h2>
+              <label class="switch" title="每次启动程序时清空上一场残留">
+                <input id="autoclearToggle" type="checkbox">
+                <span></span>
+              </label>
+            </div>
+            <p class="hint">开启后每次启动程序都会清空队列、待用灯牌资格，并把「已叫号」计数归零。</p>
+          </section>
+
+          <section class="panel test-panel">
+            <p class="label">OFFLINE TEST</p>
+            <h2>未开播测试</h2>
+            <label for="testName">模拟用户名</label>
+            <input id="testName" value="我是hello" autocomplete="off">
+            <div class="test-actions">
+              <button id="testQueue" type="button">发送“排队”</button>
+              <button id="testGift" type="button" class="gift">送粉丝团灯牌</button>
+            </div>
+          </section>
+
+          <section class="panel pending-panel">
+            <p class="label">PENDING PRIORITY</p>
+            <h2>先送灯牌的用户</h2>
+            <div id="pendingList" class="pending-list"><p class="empty small">暂无记录</p></div>
+          </section>
+        </aside>
+      </div>
+
+      <footer>
+        OBS 透明队列地址：<code id="overlayUrl"></code>
+      </footer>
+    </main>
+    <script src="/static/qrcode.min.js"></script>
+    <script src="/static/control.js"></script>
+  </body>
+</html>

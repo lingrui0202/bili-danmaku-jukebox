@@ -1,0 +1,227 @@
+:root {
+  color-scheme: dark;
+  --font-size: 36px;
+
+  /* ===== 票据面板参数 =====
+     竖版面板固定为 宽:高 = 2:3，上下装饰带高度固定，中间名单区占用剩余高度；
+     外框完全由 CSS 绘制（无图片素材），人数放不下时名单循环滚动。 */
+  --s: 1; /* 缩放系数 = 面板宽 / 936，由 overlay.js 动态设置 */
+
+  /* 名单区左右留白：与主题图票据内区（原图 x113–852）对齐 */
+  --list-inset-left: 12.1%;
+  --list-inset-right: 8.9%;
+
+  /* ===== 票据配色（取自主题图）===== */
+  --plum-deep: #37162e;
+  --rose: #d876a5;
+  --rose-light: #e087b2;
+  --pink: #ff8ec4;
+  --gold: #e09747;
+
+  --row-odd-bg: linear-gradient(180deg, rgba(233, 155, 193, 0.97), rgba(206, 104, 155, 0.96));
+  --row-odd-border: rgba(255, 226, 242, 0.75);
+  --row-odd-text: #33142b;
+  --row-odd-rank: #7d2b58;
+  --row-even-bg: linear-gradient(180deg, rgba(78, 30, 64, 0.97), rgba(46, 17, 38, 0.96));
+  --row-even-border: rgba(255, 142, 196, 0.55);
+  --row-even-text: #ffe3f1;
+  --row-even-rank: #ffb0d8;
+  --tag-bg: rgba(255, 207, 106, 0.9);
+  --tag-text: #3a1a05;
+}
+
+* { box-sizing: border-box; }
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: transparent !important;
+}
+
+body {
+  display: grid;
+  place-items: center;
+  padding: 0;
+  font-family: "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
+}
+
+/* 固定尺寸竖版面板：宽:高 = 2:3 */
+.queue-module {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: flex;
+  flex-direction: column;
+  width: min(100vw, calc(100vh * 2 / 3));
+  aspect-ratio: 2 / 3;
+  transform: translate(-50%, -50%);
+}
+
+/* 外框层：纯 CSS 绘制的票据皮肤（顶部装饰带 284、底部装饰带 248，
+   中间随面板高度延伸）。透明度由 --frame-opacity 控制，不影响名单文字。 */
+.queue-module::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  border: calc(var(--s) * 3px) solid rgba(255, 226, 242, 0.72);
+  border-radius: calc(var(--s) * 26px);
+  background:
+    repeating-linear-gradient(
+      135deg,
+      rgba(255, 255, 255, 0.035) 0 2px,
+      rgba(255, 255, 255, 0) 2px 12px
+    ),
+    linear-gradient(
+      180deg,
+      rgba(74, 31, 63, 0.97) 0,
+      rgba(55, 22, 46, 0.96) calc(var(--s) * 284px),
+      rgba(40, 15, 33, 0.94) calc(var(--s) * 284px + 1px),
+      rgba(40, 15, 33, 0.94) calc(100% - var(--s) * 248px),
+      rgba(46, 17, 38, 0.97) 100%
+    );
+  box-shadow:
+    0 calc(var(--s) * 8px) calc(var(--s) * 26px) rgba(23, 4, 16, 0.45),
+    inset 0 0 calc(var(--s) * 30px) rgba(255, 142, 196, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  opacity: var(--frame-opacity, 1);
+}
+
+/* 金色分隔线：顶带底边 / 底带顶边 */
+.queue-module::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  border-radius: calc(var(--s) * 26px);
+  background:
+    linear-gradient(90deg, transparent, rgba(224, 151, 71, 0.9), transparent)
+      0 calc(var(--s) * 284px) / 100% calc(var(--s) * 2px) no-repeat,
+    linear-gradient(90deg, transparent, rgba(224, 151, 71, 0.9), transparent)
+      0 calc(100% - var(--s) * 248px) / 100% calc(var(--s) * 2px) no-repeat;
+  opacity: var(--frame-opacity, 1);
+}
+
+.queue-module.backend-offline {
+  visibility: hidden;
+}
+
+/* 名单区：外框改为独立 ::before 层后，用上下 margin 模拟原 border 挤出的
+   装饰区（284/248），使名单仍落在票据内区；放不下时滚动 */
+.queue-safe-area {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  min-height: 0;
+  margin: calc(var(--s) * 284px) 0 calc(var(--s) * 248px) 0;
+  overflow: hidden;
+}
+
+.queue {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  width: 100%;
+  margin: 0 auto;
+  padding: calc(var(--s) * 4px) var(--list-inset-right) calc(var(--s) * 10px) var(--list-inset-left);
+  gap: calc(var(--s) * 8px);
+  font-size: var(--font-size);
+  opacity: var(--name-opacity, 1);
+}
+
+/* 人数过多：整体向上循环滚动（内容复制一份后无缝衔接） */
+.queue.scrolling {
+  animation: queue-scroll var(--scroll-duration, 20s) linear infinite;
+}
+
+@keyframes queue-scroll {
+  from { transform: translateY(0); }
+  to { transform: translateY(calc(-1 * var(--scroll-distance, 0px))); }
+}
+
+.queue-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-start;
+  gap: 0.14em;
+  min-width: 0;
+  padding: 0.11em 0.72em 0.13em 0.6em;
+  border: 1px solid var(--row-odd-border);
+  border-radius: 999px; /* 胶囊 */
+  background: var(--row-odd-bg);
+  color: var(--row-odd-text);
+  font-weight: 800;
+  line-height: 1.16;
+  letter-spacing: 0.02em;
+  box-shadow:
+    0 calc(var(--s) * 2px) calc(var(--s) * 6px) rgba(35, 5, 20, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.35);
+  animation: row-in 320ms cubic-bezier(.2, .8, .2, 1) both;
+}
+
+.queue-row[data-clone] {
+  animation: none; /* 复制出来的行不再播放入场动画 */
+}
+
+.queue-row:nth-child(even) {
+  border-color: var(--row-even-border);
+  background: var(--row-even-bg);
+  color: var(--row-even-text);
+  box-shadow:
+    0 calc(var(--s) * 2px) calc(var(--s) * 6px) rgba(35, 5, 20, 0.4),
+    inset 0 1px 0 rgba(255, 142, 196, 0.22);
+}
+
+/* 当前进行中的第 1 位 */
+.queue-row:first-child {
+  border-color: rgba(255, 207, 106, 0.95);
+  box-shadow:
+    0 0 0 calc(var(--s) * 2px) rgba(255, 207, 106, 0.3),
+    0 calc(var(--s) * 2px) calc(var(--s) * 8px) rgba(35, 5, 20, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.4);
+}
+
+.rank {
+  flex: none;
+  min-width: 1.5em;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.arrow { flex: none; }
+.name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 要打的内容：行尾小标签 */
+.content {
+  flex: none;
+  margin-left: auto;
+  padding: 0.06em 0.5em;
+  border-radius: 999px;
+  background: var(--tag-bg);
+  color: var(--tag-text);
+  font-size: 0.62em;
+  font-weight: 800;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+
+.queue-row:nth-child(odd) .rank,
+.queue-row:nth-child(odd) .arrow { color: var(--row-odd-rank); }
+.queue-row:nth-child(even) .rank,
+.queue-row:nth-child(even) .arrow { color: var(--row-even-rank); }
+
+@keyframes row-in {
+  from { opacity: 0; transform: translateX(-18px); }
+  to { opacity: 1; transform: translateX(0); }
+}

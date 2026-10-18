@@ -1,0 +1,13 @@
+{
+  "font_size": 36,
+  "frame_opacity": 18,
+  "name_opacity": 58,
+  "priority_enabled": true,
+  "clear_on_start": true,
+  "served_count": 0,
+  "revision": 40,
+  "queue": [
+    {"id":"hash:8eb9afb1","name":"是***","source":"bilibili","content":"轨外","joined_at":1792327392,"priority":false}
+  ],
+  "pending_priority": []
+}

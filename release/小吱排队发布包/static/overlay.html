@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>小吱排队工具 · OBS 名单</title>
+    <link rel="stylesheet" href="/static/overlay.css">
+  </head>
+  <body>
+    <!-- 票据面板：外框由 CSS 绘制，顶部/底部装饰带固定，中间名单区随人数延伸。 -->
+    <main class="queue-module">
+      <section class="queue-safe-area">
+        <div id="queue" class="queue" aria-live="polite"></div>
+      </section>
+    </main>
+    <script src="/static/overlay.js"></script>
+  </body>
+</html>
