@@ -282,6 +282,13 @@
 
   <!-- 点歌台 -->
   <div class="content" id="tab-request">
+    <div class="card" id="request-off-banner" style="display:none;border-color:rgba(255,176,32,.4)">
+      <h3>&#9888;&#65039; 点歌功能已关闭 <span class="sub">观众弹幕点歌不会生效</span></h3>
+      <div class="row">
+        <span class="tip" style="margin:0">主播可手动加歌；需要观众点歌时请先开启。</span>
+        <button class="btn" onclick="goTab('settings')">去设置页开启</button>
+      </div>
+    </div>
     <div class="card">
       <h3>&#128269; 搜索点歌</h3>
       <div class="row">
@@ -362,6 +369,13 @@
 
   <!-- 设置 -->
   <div class="content" id="tab-settings">
+    <div class="card" id="request-switch-card">
+      <h3>&#127925; 点歌功能 <span class="sub" id="request-switch-state">已关闭（默认）</span></h3>
+      <div class="row" style="align-items:center;gap:12px">
+        <button class="btn" id="request-toggle-btn" onclick="toggleRequest()">开启点歌</button>
+        <span class="tip" style="margin:0">关闭时观众弹幕「点歌 歌名」全部忽略；开启后立即生效，不影响正在播放的歌曲。</span>
+      </div>
+    </div>
     <div class="card">
       <h3>&#128250; 直播间</h3>
       <div class="row">
@@ -554,6 +568,10 @@
       body: JSON.stringify(body || {}),
     }).then(function (r) { return r.json(); });
   }
+  window.goTab = function (name) {
+    var btn = document.querySelector('.nav-btn[data-tab="' + name + '"]');
+    if (btn) btn.click();
+  };
 
   /* ---------- 导航 ---------- */
   document.querySelectorAll(".nav-btn").forEach(function (btn) {
@@ -616,7 +634,7 @@
 
   /* ---------- 渲染 ---------- */
   function render(st) {
-    renderPlay(st); renderQueue(st); renderSources(st); renderSettingsValues(st);
+    renderPlay(st); renderQueue(st); renderSources(st); renderSettingsValues(st); renderRequestSwitch();
   }
 
   function renderPlay(st) {
@@ -744,6 +762,28 @@
     });
     $("platform-list").innerHTML = plats;
   }
+
+  /* ---------- 点歌总开关 ---------- */
+  function renderRequestSwitch() {
+    var on = !!(lastState && lastState.jukebox_cfg && lastState.jukebox_cfg.request_enabled);
+    var btn = $("request-toggle-btn");
+    if (btn) {
+      btn.textContent = on ? "关闭点歌" : "开启点歌";
+      btn.className = on ? "btn ghost" : "btn";
+    }
+    var stEl = $("request-switch-state");
+    if (stEl) stEl.textContent = on ? "运行中" : "已关闭（默认）";
+    var banner = $("request-off-banner");
+    if (banner) banner.style.display = on ? "none" : "block";
+  }
+  window.toggleRequest = function () {
+    var on = !(lastState && lastState.jukebox_cfg && lastState.jukebox_cfg.request_enabled);
+    api("/api/settings", { patch: { jukebox: { request_enabled: on } } }).then(function () {
+      toast(on ? "点歌功能已开启，观众可以点歌了" : "点歌功能已关闭");
+      if (lastState && lastState.jukebox_cfg) lastState.jukebox_cfg.request_enabled = on;
+      renderRequestSwitch();
+    }).catch(function () { toast("操作失败"); });
+  };
 
   function renderSettingsValues(st) {
     if (document.activeElement && document.activeElement.tagName === "INPUT" && document.activeElement.closest("#tab-settings")) return;

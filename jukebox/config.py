@@ -51,6 +51,7 @@ DEFAULTS: dict[str, Any] = {
     "server": {"host": "0.0.0.0", "port": 8788, "open_browser": True},
     "danmaku": {"mode": "mock", "room_id": 0, "credential_file": ""},
     "jukebox": {
+        "request_enabled": False,     # 点歌功能默认关闭，主播在管理页手动开启
         "request_prefixes": ["点歌", "求歌", "来首", "我想听"],
         "user_cooldown_seconds": 0,   # 默认无冷却
         "song_cooldown_minutes": 0,   # 默认无冷却

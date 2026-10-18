@@ -12,6 +12,7 @@ danmaku:
   credential_file: "" # B站登录 Cookie JSON 文件路径（可选）
 
 jukebox:
+  request_enabled: false           # 点歌功能默认关闭，在管理页「设置」一键开启
   request_prefixes: ["点歌", "求歌", "来首", "我想听"]  # 点歌指令前缀（最长匹配优先）
   user_cooldown_seconds: 0         # 同一用户两次点歌最小间隔（秒）；0 = 无冷却
   song_cooldown_minutes: 0         # 同一首歌重复点歌冷却（分钟）；0 = 无冷却

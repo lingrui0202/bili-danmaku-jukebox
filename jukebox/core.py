@@ -59,6 +59,7 @@ class JukeboxCore:
     def apply_config(self, config: dict) -> None:
         self.config = config or {}
         jb = self.config.get("jukebox", {})
+        self.request_enabled = bool(jb.get("request_enabled", False))
         self.prefixes = list(jb.get("request_prefixes") or [])
         self.user_cooldown = int(jb.get("user_cooldown_seconds", 30))
         self.song_cooldown_minutes = int(jb.get("song_cooldown_minutes", 10))
@@ -125,6 +126,7 @@ class JukeboxCore:
             ],
             "active_sources": list(self.active_sources),
             "jukebox_cfg": {
+                "request_enabled": bool(getattr(self, "request_enabled", False)),
                 "request_prefixes": list(self.prefixes),
                 "user_cooldown_seconds": self.user_cooldown,
                 "song_cooldown_minutes": self.song_cooldown_minutes,
@@ -222,6 +224,9 @@ class JukeboxCore:
             return (True, msg)
 
         if action == "request":
+            if not getattr(self, "request_enabled", False):
+                self._log("system", "点歌功能未开启，已忽略该指令（设置页可开启）", uname=d.uname, uid=d.uid)
+                return None
             return await self.request_song(d.uid, d.uname, arg, from_danmu=True)
 
         return None
