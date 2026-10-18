@@ -1,0 +1,565 @@
+"""弹幕监听：Danmu 数据类 + DANMU_MSG 解析 + DanmakuListener（mock/live）。"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import re
+import struct
+import time
+import zlib
+from dataclasses import dataclass
+from typing import Any, Awaitable, Callable, Iterator, Optional, Tuple
+
+import httpx
+
+_EMOJI_RE = re.compile(r"^\[[^\[\]]{1,30}\]$")
+
+_BILI_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
+
+
+@dataclass
+class Danmu:
+    text: str
+    uid: int
+    uname: str
+    medal_level: int = 0
+    is_emoji: bool = False
+    ts: float = 0.0
+
+
+def _stable_hash_id(extra_str: str) -> int:
+    """uid=0 的新结构：从 extra.user_hash 生成稳定数字 ID。"""
+    try:
+        payload = json.loads(extra_str)
+        user_hash = payload.get("extra", {}).get("user_hash", "") if isinstance(payload, dict) else ""
+        if not user_hash and isinstance(payload, dict):
+            user_hash = str(payload.get("user_hash", ""))
+    except Exception:
+        user_hash = extra_str
+    return abs(hash(user_hash)) % 10**10 or 1
+
+
+@dataclass
+class Gift:
+    """SEND_GIFT 事件摘要（直播排队用来识别灯牌礼物）。"""
+    uid: int
+    uname: str
+    gift_name: str
+    num: int = 1
+    ts: float = 0.0
+
+
+def parse_gift_event(data: Any) -> Optional[Gift]:
+    """从 B站 SEND_GIFT 事件的 data 解析礼物摘要。"""
+    try:
+        d = data.get("data") or {}
+        uid = int(d.get("uid") or 0)
+        uname = str(d.get("uname") or "")
+        gift_name = str(d.get("giftName") or "")
+        if not gift_name:
+            gift_name = str((d.get("gift_info") or {}).get("name") or "")
+        num = int(d.get("num") or 1)
+    except Exception:
+        return None
+    if not gift_name:
+        return None
+    return Gift(uid=uid, uname=uname, gift_name=gift_name, num=num, ts=time.time())
+
+
+def parse_danmu_event(data: Any) -> Optional[Danmu]:
+    """从 B站 DANMU_MSG 事件的 data 解析。"""
+    try:
+        info = data["info"]
+        text = info[1]
+        user = info[2]  # [uid, uname, ...]
+        uid = user[0]
+        uname = user[1]
+        medal_level = 0
+        try:
+            medal_level = user[5] if len(user) > 5 else 0
+        except Exception:
+            medal_level = 0
+    except Exception:
+        return None
+
+    if not uid:
+        # 新结构 uid=0：遍历 info 嵌套 list 找 {"extra": "..."}
+        try:
+            for item in info:
+                if isinstance(item, list):
+                    for sub in item:
+                        if isinstance(sub, dict) and "extra" in sub:
+                            uid = _stable_hash_id(str(sub.get("extra", "")))
+                            break
+        except Exception:
+            pass
+
+    if not uname:
+        uname = f"用户{uid}"
+
+    text = str(text)
+    return Danmu(
+        text=text,
+        uid=int(uid or 0),
+        uname=str(uname),
+        medal_level=int(medal_level or 0),
+        is_emoji=bool(_EMOJI_RE.match(text)),
+        ts=time.time(),
+    )
+
+
+_LOGGER = __import__("logging").getLogger("jukebox.danmaku")
+
+
+def _dbg(msg: str) -> None:
+    """弹幕连接调试日志（排查收不到弹幕时用）。"""
+    try:
+        _LOGGER.info("[弹幕] %s", msg)
+    except Exception:
+        pass
+
+
+# ---------------- 自研 B站直播弹幕客户端 ----------------
+
+def _cookie_from_credential(credential: Any) -> str:
+    """把 bilibili_api Credential / dict / JSON 字符串 / 原始 Cookie 串统一成 Cookie 头。"""
+    if credential is None:
+        return ""
+    raw = ""
+    try:
+        d = credential.get_cookies()  # bilibili_api.Credential
+        raw = "; ".join(f"{k}={v}" for k, v in (d or {}).items() if v)
+    except Exception:
+        raw = credential if isinstance(credential, str) else ""
+    raw = (raw or "").strip()
+    if raw.startswith("{"):  # JSON 字符串形式的 cookie dict
+        try:
+            d = json.loads(raw)
+            raw = "; ".join(f"{k}={v}" for k, v in (d or {}).items() if v)
+        except Exception:
+            pass
+    return raw.replace("\n", " ").replace("\r", " ").strip("; ")
+
+
+def _cookie_uid(cookie: str) -> int:
+    """从 Cookie 串里取 DedeUserID（登录 uid，匿名=0）。"""
+    for part in (cookie or "").split(";"):
+        if "=" in part:
+            k, v = part.split("=", 1)
+            if k.strip().lower() == "dedeuserid":
+                try:
+                    return int(v.strip())
+                except Exception:
+                    return 0
+    return 0
+
+
+async def _fetch_danmu_conf(room_id: int, cookie: str = "") -> Tuple[str, str, int]:
+    """拿弹幕 token 与 ws 地址。
+
+    注意：bilibili_api 用的 xlive/.../getDanmuInfo 现在对无登录的非浏览器请求
+    一律返回 -352 风控（拿不到 token → 认证包发出后服务器不回 → connect() 永久挂起）。
+    旧接口 room/v1/Danmu/getConf 仍然正常工作，这里用它。
+    带上 B站登录 Cookie 可提升通过率，并可能解锁未开播房间的消息推送。
+    """
+    headers = {
+        "User-Agent": _BILI_UA,
+        "Referer": f"https://live.bilibili.com/{int(room_id)}",
+        "Origin": "https://live.bilibili.com",
+    }
+    if cookie:
+        headers["Cookie"] = cookie
+    async with httpx.AsyncClient(timeout=10, follow_redirects=True) as h:
+        r = await h.get(
+            "https://api.live.bilibili.com/room/v1/Danmu/getConf",
+            params={"room_id": int(room_id), "platform": "pc", "player": "web"},
+            headers=headers,
+        )
+        d = ((r.json() or {}).get("data") or {})
+        token = str(d.get("token") or "")
+        host, port = "", 0
+        for hp in d.get("host_server_list") or []:
+            if hp.get("host") and (hp.get("wss_port") or hp.get("port")):
+                host, port = str(hp["host"]), int(hp.get("wss_port") or hp.get("port"))
+                break
+        if not host:
+            host = str(d.get("host") or "broadcastlv.chat.bilibili.com")
+            port = int(d.get("port") or 2245)
+        return token, host, port
+
+
+def _pack(op: int, body: bytes) -> bytes:
+    """B站弹幕协议封包：16 字节头 + 正文。"""
+    return struct.pack(">IHHII", 16 + len(body), 16, 1, op, 1) + body
+
+
+def _iter_packets(data: bytes) -> Iterator[Tuple[int, bytes]]:
+    """解一帧数据里的所有包（可能粘包），返回 (op, 正文)。
+
+    关键：protover=2(zlib)/3(brotli) 时，一个 op=5 包的正文是**压缩后的连续多个协议包**，
+    必须解压后再按协议包结构递归解析——直接 json.loads 解压结果会失败（多个 JSON 连在一起），
+    表现为「认证成功但永远收不到弹幕」。
+    """
+    i = 0
+    while i + 16 <= len(data):
+        try:
+            total, hlen, ver, op, _seq = struct.unpack(">IHHII", data[i : i + 16])
+        except Exception:
+            break
+        if total < 16 or i + total > len(data):
+            break
+        body = data[i + hlen : i + total]
+        i += total
+        if ver == 2:  # zlib：正文是压缩后的连续协议包
+            try:
+                yield from _iter_packets(zlib.decompress(body))
+            except Exception:
+                pass
+        elif ver == 3:  # brotli
+            try:
+                import brotli  # type: ignore
+
+                yield from _iter_packets(brotli.decompress(body))
+            except Exception:
+                pass
+        else:
+            yield op, body
+
+
+class BiliLiveWS:
+    """直连 B站直播弹幕服务器（不依赖 bilibili_api）。
+
+    协议：认证(op=7) -> 服务器回认证成功(op=8) -> 每 30s 心跳(op=2) -> 消息(op=5)。
+    """
+
+    OP_HEARTBEAT, OP_MESSAGE, OP_AUTH, OP_AUTH_OK = 2, 5, 7, 8
+    #: 协议版本：1=不压缩，2=zlib。B站新版只对 protover>=2 的客户端下发消息，
+    #: 用 1 会出现「认证成功但永远收不到弹幕」。
+    _PROTOVER = 2
+
+    def __init__(self, room_id: int, on_event: Callable[[dict], Awaitable[None]], cookie: str = ""):
+        self.room_id = int(room_id)
+        self.on_event = on_event
+        self.cookie = _cookie_from_credential(cookie)
+        self.uid = _cookie_uid(self.cookie)
+        self._ws = None
+        self._hb: Optional[asyncio.Task] = None
+        self._closed = False
+        self._frames = 0
+
+    def _buvid_from_cookie(self) -> str:
+        for part in (self.cookie or "").split(";"):
+            if "=" in part:
+                k, v = part.split("=", 1)
+                if k.strip().lower() == "buvid3":
+                    return v.strip()
+        return ""
+
+    async def _ensure_buvid(self) -> Tuple[str, str]:
+        """返回 (buvid3, buvid4)。匿名连接需要真实 buvid（从 /x/frontend/finger/spi 取），
+        否则 B站在未开播房间可能不推送消息。登录态则直接用 Cookie 里的 buvid3。"""
+        buvid = self._buvid_from_cookie()
+        if buvid:
+            return buvid, ""
+        try:
+            async with httpx.AsyncClient(timeout=10, follow_redirects=True) as h:
+                r = await h.get(
+                    "https://api.bilibili.com/x/frontend/finger/spi",
+                    headers={"User-Agent": _BILI_UA},
+                )
+                d = ((r.json() or {}).get("data") or {})
+                return str(d.get("b_3") or ""), str(d.get("b_4") or "")
+        except Exception:
+            return "", ""
+
+    async def run(self) -> None:
+        import websockets
+
+        token, host, port = await _fetch_danmu_conf(self.room_id, self.cookie)
+        buvid, buvid4 = await self._ensure_buvid()
+        url = f"wss://{host}:{port}/sub"
+        _dbg(f"房间 {self.room_id} 弹幕服务器 {url} token_len={len(token)} "
+             f"登录uid={self.uid or '匿名'} buvid3={'有' if buvid else '无'}")
+        # 握手带上浏览器式请求头 + Cookie（含 buvid3/buvid4/CURRENT_FNVAL，对齐官方 web 端）
+        headers = {
+            "User-Agent": _BILI_UA,
+            "Origin": "https://live.bilibili.com",
+        }
+        cookie = self.cookie or ""
+        if buvid and "buvid3=" not in cookie:
+            cookie = (cookie + ";" if cookie else "") + f"buvid3={buvid};"
+            if buvid4:
+                cookie += f"buvid4={buvid4};"
+            cookie += "CURRENT_FNVAL=4048"
+        if cookie:
+            headers["Cookie"] = cookie
+        try:
+            ws_ctx = websockets.connect(url, open_timeout=10, ping_interval=None,
+                                        additional_headers=headers)
+        except TypeError:  # 旧版 websockets 参数名不同
+            ws_ctx = websockets.connect(url, open_timeout=10, ping_interval=None,
+                                        extra_headers=headers)
+        async with ws_ctx as ws:
+            self._ws = ws
+            body = json.dumps(
+                {
+                    "uid": self.uid,
+                    "roomid": self.room_id,
+                    "protover": self._PROTOVER,
+                    "platform": "web",
+                    "type": 2,
+                    "key": token,
+                    "buvid": buvid,
+                },
+                separators=(",", ":"),
+            ).encode()
+            _dbg(f"发送认证包 protover={self._PROTOVER} uid={self.uid} buvid={'有' if buvid else '无'}")
+            await ws.send(_pack(self.OP_AUTH, body))
+            self._hb = asyncio.create_task(self._heartbeat())
+            try:
+                async for msg in ws:
+                    if not isinstance(msg, (bytes, bytearray)):
+                        continue
+                    self._frames += 1
+                    for op, payload in _iter_packets(bytes(msg)):
+                        _dbg(f"收到 op={op} len={len(payload)} "
+                             f"{payload[:160].decode('utf-8', 'ignore')!r}")
+                        await self._handle(op, payload)
+            finally:
+                self._closed = True
+                if self._hb:
+                    self._hb.cancel()
+
+    async def _heartbeat(self) -> None:
+        try:
+            # 心跳体用 "[object Object]"：与 B站 web 端一致，
+            # 比空包更符合官方客户端行为
+            while not self._closed and self._ws is not None:
+                await asyncio.sleep(10)
+                await self._ws.send(_pack(self.OP_HEARTBEAT, b"[object Object]"))
+        except (asyncio.CancelledError, Exception):
+            pass
+
+    async def _handle(self, op: int, payload: bytes) -> None:
+        if op == self.OP_AUTH_OK:
+            await self.on_event({"cmd": "__AUTH_OK__"})
+            return
+        if op != self.OP_MESSAGE or not payload:
+            return
+        try:
+            info = json.loads(payload.decode("utf-8", "ignore"))
+        except Exception:
+            return
+        if isinstance(info, dict) and info.get("cmd"):
+            await self.on_event(info)
+
+    async def close(self) -> None:
+        self._closed = True
+        if self._hb:
+            self._hb.cancel()
+            try:
+                await self._hb
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._hb = None
+        if self._ws is not None:
+            try:
+                await self._ws.close()
+            except Exception:
+                pass
+            self._ws = None
+
+
+class DanmakuListener:
+    """弹幕监听器：mock 模式只注入；live 模式直连 B站弹幕服务器。"""
+
+    def __init__(
+        self,
+        room_id: int,
+        on_danmu: Callable[[Danmu], Awaitable],
+        on_status: Optional[Callable[[dict], Awaitable]] = None,
+        credential: Any = None,
+        mock: bool = False,
+        on_gift: Optional[Callable[[Gift], Awaitable]] = None,
+    ):
+        self.room_id = int(room_id or 0)
+        self.on_danmu = on_danmu
+        self.on_status = on_status
+        self.credential = credential
+        self.mock = mock
+        self.on_gift = on_gift
+        self.connected = False
+        self.total_received = 0
+        self.status = "idle"
+        self.live_status: Optional[int] = None  # 0=未开播 1=直播中 2=轮播
+        self.last_error = ""
+        self._task: Optional[asyncio.Task] = None
+        self._session = None  # LiveDanmaku 实例
+        self._closed = False
+
+    async def _emit_status(self) -> None:
+        if self.on_status:
+            try:
+                await self.on_status(self.status_dict())
+            except Exception:
+                pass
+
+    def status_dict(self) -> dict:
+        return {
+            "mode": "mock" if self.mock else "live",
+            "room_id": self.room_id,
+            "connected": self.connected,
+            "total_received": self.total_received,
+            "live_status": self.live_status,
+            "error": self.last_error,
+        }
+
+    async def _mark_connected(self) -> None:
+        if not self.connected:
+            self.connected = True
+            self.status = "connected"
+            await self._emit_status()
+
+    def _on_task_done(self, task: "asyncio.Task") -> None:
+        """连接任务结束回调：把异常/断开真实反映到状态里（以前是被静默吞掉）。"""
+        if task.cancelled():
+            return
+        err = None
+        try:
+            err = task.exception()
+        except Exception:
+            return
+        self.connected = False
+        if err is not None:
+            self.last_error = f"{type(err).__name__}: {err}"
+            self.status = f"error: {err}"
+        else:
+            self.status = "disconnected"
+        try:
+            asyncio.get_running_loop().create_task(self._emit_status())
+        except RuntimeError:
+            pass
+
+    async def start(self) -> None:
+        if self.mock:
+            self.status = "mock"
+            await self._emit_status()
+            return
+        self._closed = False
+        self._task = asyncio.create_task(self._run_loop())
+        self._task.add_done_callback(self._on_task_done)
+
+    async def _run_loop(self) -> None:
+        """连接 + 自动重连循环（网络抖动时无限重试）。
+
+        网络抖动/服务器断开时回到这里重连，而不是静默停在 disconnected。
+        total_received 在同一 listener 实例内累计，重连不清零。
+        """
+        backoff = 3
+        while not self._closed:
+            try:
+                # 主播身份连接：未开播房间的弹幕推送很可能要求登录态
+                cookie = _cookie_from_credential(self.credential)
+                self._session = BiliLiveWS(self.room_id, self._on_event, cookie=cookie)
+                self.status = "connecting"
+                await self._emit_status()
+                await self._session.run()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                self.last_error = f"{type(e).__name__}: {e}"
+            finally:
+                self.connected = False
+                if self._session is not None:
+                    try:
+                        await self._session.close()
+                    except Exception:
+                        pass
+                    self._session = None
+            if self._closed:
+                break
+            self.status = "reconnecting" + (f": {self.last_error}" if self.last_error else "")
+            await self._emit_status()
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 30)
+
+    async def _on_event(self, info: dict) -> None:
+        """弹幕服务器事件分发（自研客户端回调）。"""
+        cmd = (info or {}).get("cmd") or ""
+        if cmd == "__AUTH_OK__":
+            # 认证成功：没开播/没人发弹幕时也能正确显示「已连接」
+            await self._mark_connected()
+            await self._refresh_live_status()
+            return
+        if cmd == "DANMU_MSG":
+            await self._handle(info)
+            return
+        if cmd == "SEND_GIFT":
+            # 礼物事件：直播排队的灯牌插队依赖它
+            await self._mark_connected()
+            g = parse_gift_event(info)
+            if g is not None and self.on_gift:
+                try:
+                    await self.on_gift(g)
+                except Exception:
+                    pass
+            return
+        # 其他消息（进场/点赞/礼物等）也说明连接是健康的
+        if cmd:
+            await self._mark_connected()
+
+    async def _refresh_live_status(self) -> None:
+        """查询直播间开播状态（0=未开播 1=直播中 2=轮播），用于 UI 提示。"""
+        try:
+            import httpx
+
+            async with httpx.AsyncClient(timeout=8, follow_redirects=True) as h:
+                r = await h.get(
+                    f"https://api.live.bilibili.com/room/v1/Room/get_info?room_id={self.room_id}",
+                    headers={"User-Agent": "Mozilla/5.0"},
+                )
+                self.live_status = ((r.json() or {}).get("data") or {}).get("live_status")
+                await self._emit_status()
+        except Exception:
+            pass
+
+    async def _handle(self, data: Any) -> None:
+        d = parse_danmu_event(data)
+        if d is None:
+            return
+        await self._mark_connected()
+        self.total_received += 1
+        try:
+            await self.on_danmu(d)
+        except Exception:
+            pass
+
+    async def stop(self) -> None:
+        self._closed = True  # 先让重连循环退出，再取消任务，避免又自动连上
+        if self._task:
+            self._task.cancel()
+            try:
+                await self._task
+            except (asyncio.CancelledError, Exception):
+                # cancel() 后 await 会抛 CancelledError（3.8+ 是 BaseException，
+                # except Exception 抓不到），漏掉它会让重连/关停整个接口 500
+                pass
+            self._task = None
+        if self._session is not None:
+            try:
+                await self._session.close()
+            except Exception:
+                pass
+            self._session = None
+        self.connected = False
+        self.status = "stopped"
+
+    async def inject(self, text: str, uname: str = "测试用户", uid: int = 0) -> None:
+        """注入模拟弹幕（mock 调试用）。"""
+        d = Danmu(text=text, uid=int(uid or 0), uname=uname, ts=time.time())
+        self.total_received += 1
+        await self.on_danmu(d)

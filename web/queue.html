@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>直播排队 · OBS 名单</title>
+    <link rel="stylesheet" href="/web/queue.css">
+  </head>
+  <body>
+    <!-- 竖版排队面板（2:3）：头部标题+实时人数，下方名单区人数超出时循环滚动。 -->
+    <main class="queue-module">
+      <section class="queue-panel">
+        <header class="panel-head">
+          <h1 class="panel-title">直播排队</h1>
+          <span class="panel-count"><b id="queue-count">0</b> 人等待</span>
+        </header>
+        <div class="queue-safe-area">
+          <div id="queue" class="queue" aria-live="polite"></div>
+        </div>
+      </section>
+    </main>
+    <script src="/web/queue.js"></script>
+  </body>
+</html>

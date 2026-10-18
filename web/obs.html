@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>点歌机 · 点歌排队</title>
+<style>
+  :root { --pink: #FB7299; --bg: #0f1115; --text: #e8e9ec; --sub: #9aa0ab; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    display: flex; align-items: center; justify-content: center;
+    overflow: hidden;
+  }
+  /* 排队页：半透明叠加层，只显示顺序列表 */
+  body.transparent { background: transparent; }
+  body.transparent .wrap { background: rgba(15, 17, 21, 0.45); box-shadow: none; backdrop-filter: blur(4px); }
+
+  .wrap {
+    width: 340px; max-width: 92vw; max-height: 82vh;
+    padding: 12px 16px;
+    background: #14161c; border-radius: 14px;
+    display: flex; flex-direction: column;
+  }
+  .head {
+    font-size: 12px; color: var(--sub); text-align: center;
+    padding-bottom: 6px; border-bottom: 1px solid rgba(255,255,255,.06);
+    flex: none; text-shadow: 0 1px 4px rgba(0,0,0,.6);
+  }
+
+  .list {
+    flex: 1; min-height: 0; overflow: hidden; position: relative; padding: 4px 0;
+  }
+  .list-track { will-change: transform; }
+  .row {
+    display: flex; align-items: center; gap: 8px;
+    height: 28px; line-height: 28px;
+    font-size: 13px; color: #c9ccd3;
+    white-space: nowrap;
+    text-shadow: 0 1px 4px rgba(0,0,0,.6);
+  }
+  .row .no { color: var(--pink); min-width: 20px; text-align: right; flex: none; font-variant-numeric: tabular-nums; }
+  .row .t { overflow: hidden; text-overflow: ellipsis; }
+  .row .by { color: var(--sub); font-size: 11px; margin-left: auto; padding-left: 8px; flex: none; }
+  .row .pin { color: #ffb020; flex: none; }
+  /* 正在播放 */
+  .row.now { color: #fff; font-weight: 600; }
+  .row.now .no { color: #fff; }
+  .row.now .t { color: var(--pink); }
+  .q-empty { font-size: 12px; color: var(--sub); text-align: center; padding: 8px 0; text-shadow: 0 1px 4px rgba(0,0,0,.6); }
+
+  /* 点击播放遮罩（处理浏览器自动播放限制） */
+  .sound-hint {
+    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    flex-direction: column; gap: 8px; background: rgba(8,9,12,.8); color: #fff;
+    font-size: 18px; cursor: pointer; z-index: 10;
+  }
+  .sound-hint .big { font-size: 40px; }
+  .sound-hint.hidden { display: none; }
+</style>
+</head>
+<body>
+<div class="wrap" id="wrap">
+  <div class="head" id="head">点歌排队</div>
+  <div class="list" id="list"><div class="list-track" id="list-track"><div class="q-empty">暂无点歌，发送「点歌 歌名」</div></div></div>
+</div>
+<audio id="audio" preload="auto"></audio>
+<div class="sound-hint hidden" id="sound-hint"><div class="big">&#9654;</div><div>点击任意处播放声音</div></div>
+
+<script>
+(function () {
+  // 排队页默认半透明（OBS 叠加层）
+  document.body.classList.add("transparent");
+
+  var audio = document.getElementById("audio");
+  var listEl = document.getElementById("list");
+  var trackEl = document.getElementById("list-track");
+  var headEl = document.getElementById("head");
+  var soundHint = document.getElementById("sound-hint");
+
+  var curKey = "";
+  var reportedDuration = false;
+  var scrollTimer = null;
+  var lastQueueSig = "";
+
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  function post(path, body) {
+    fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {}),
+    }).catch(function () {});
+  }
+
+  function control(action, extra) {
+    var b = { action: action };
+    if (extra) Object.keys(extra).forEach(function (k) { b[k] = extra[k]; });
+    post("/api/control", b);
+  }
+
+  // 声音提示遮罩：点击恢复播放（应对浏览器自动播放限制）
+  soundHint.addEventListener("click", function () {
+    soundHint.classList.add("hidden");
+    if (audio.src) audio.play().catch(function () {});
+  });
+
+  /* ---------- 顺序列表渲染（正在播放 + 待播队列，超出自动滚动） ---------- */
+  function renderList(st) {
+    var cur = st && st.current;
+    var q = (st && st.queue) || [];
+    var sig = JSON.stringify(cur ? [cur.display, cur.source] : null) + "|" +
+              q.map(function (it) { return it.display + it.source + (it.pinned ? 1 : 0); }).join("|");
+    if (sig === lastQueueSig) return;
+    lastQueueSig = sig;
+
+    headEl.textContent = q.length ? ("点歌排队 · 待播 " + q.length + " 首") : "点歌排队";
+
+    var rows = "";
+    if (cur) {
+      rows += '<div class="row now"><span class="no">&#9654;</span><span class="t">' +
+        esc(cur.display || "") + '</span><span class="by">' + esc(cur.requested_by || "") + "</span></div>";
+    }
+    if (!cur && !q.length) {
+      rows = '<div class="q-empty">暂无点歌，发送「点歌 歌名」</div>';
+    }
+    q.forEach(function (it, i) {
+      rows += '<div class="row"><span class="no">' + (i + 1) + '.</span><span class="t">' +
+        esc(it.display || "") + '</span>' +
+        (it.pinned ? '<span class="pin">&#9733;</span>' : "") +
+        '<span class="by">' + esc(it.requested_by || "") + "</span></div>";
+    });
+    if (cur && !q.length) {
+      rows += '<div class="q-empty">待播队列空空的~</div>';
+    }
+    trackEl.innerHTML = rows;
+
+    // 超出可视高度时无缝向上滚动
+    if (scrollTimer) { clearInterval(scrollTimer); scrollTimer = null; }
+    trackEl.style.transform = "translateY(0)";
+    if (trackEl.scrollHeight > listEl.clientHeight + 4) {
+      trackEl.innerHTML += rows; // 复制一份实现无缝循环
+      var max = trackEl.scrollHeight / 2;
+      var off = 0;
+      scrollTimer = setInterval(function () {
+        off += 0.4;
+        if (off >= max) off = 0;
+        trackEl.style.transform = "translateY(" + (-off) + "px)";
+      }, 30);
+    }
+  }
+
+  function loadSong(cur) {
+    if (!cur || !cur.stream_url) return;
+    reportedDuration = false;
+    audio.src = cur.stream_url;
+    audio.play().then(function () {
+      soundHint.classList.add("hidden");
+    }).catch(function () {
+      // 浏览器拦截自动播放：弹出提示，等用户点击页面任意处恢复
+      soundHint.classList.remove("hidden");
+    });
+  }
+
+  function render(st) {
+    renderList(st);
+    var cur = st && st.current;
+    if (!cur) {
+      curKey = "";
+      audio.removeAttribute("src");
+      return;
+    }
+    var key = cur.source + ":" + cur.id;
+    if (key !== curKey) {
+      curKey = key;
+      loadSong(cur);
+    }
+    // 与音频元素同步 seek
+    var prog = cur.progress || 0;
+    if (Math.abs(audio.currentTime - prog) > 3 && audio.duration && !audio.seeking) {
+      try { audio.currentTime = prog; } catch (e) {}
+    }
+  }
+
+  // 播放器事件 -> 回报服务端
+  audio.addEventListener("loadedmetadata", function () {
+    if (!reportedDuration && audio.duration && isFinite(audio.duration)) {
+      reportedDuration = true;
+      control("report_duration", { sec: audio.duration });
+    }
+  });
+  audio.addEventListener("ended", function () { control("report_ended"); });
+  audio.addEventListener("error", function () {
+    if (audio.src) control("report_error", { reason: "audio element error" });
+  });
+
+  // WebSocket
+  function connect() {
+    var proto = location.protocol === "https:" ? "wss://" : "ws://";
+    var ws = new WebSocket(proto + location.host + "/ws");
+    ws.onmessage = function (ev) {
+      try {
+        var msg = JSON.parse(ev.data);
+        if (msg.type === "state") render(msg.data);
+      } catch (e) {}
+    };
+    ws.onclose = function () { setTimeout(connect, 2000); };
+    ws.onerror = function () { try { ws.close(); } catch (e) {} };
+  }
+  connect();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,51 @@
+# B站弹幕点歌机 — 基线配置
+# 说明：本文件是基线；管理页的所有修改只写入 cache/settings.json，不会改动本文件。
+#       「恢复默认设置」会清空 settings.json，回到本文件的值。
+
+server:
+  host: 0.0.0.0
+  port: 8788          # 硬性端口：8788
+
+danmaku:
+  mode: mock          # mock = 模拟弹幕（不连B站）；live = 连 B站直播间
+  room_id: 0          # 直播间房间号（live.bilibili.com/ 后数字）
+  credential_file: "" # B站登录 Cookie JSON 文件路径（可选）
+
+jukebox:
+  request_prefixes: ["点歌", "求歌", "来首", "我想听"]  # 点歌指令前缀（最长匹配优先）
+  user_cooldown_seconds: 0         # 同一用户两次点歌最小间隔（秒）；0 = 无冷却
+  song_cooldown_minutes: 0         # 同一首歌重复点歌冷却（分钟）；0 = 无冷却
+  max_queue_length: 50             # 队列上限
+  max_per_user_queue: 3            # 每人同时在队列上限
+  max_song_duration: 900           # 歌曲时长上限（秒）
+  blacklist: []                    # 关键词黑名单（子串命中即拒）
+  allow_user_skip: false           # 允许观众弹幕「切歌」
+  keep_state_on_exit: true         # 关闭服务后是否保留播放列表
+
+cache:
+  dir: cache
+  search_ttl_minutes: 30           # 搜索缓存 TTL（分钟）
+
+live_queue:                        # 直播排队：与点歌共用弹幕连接/登录/直播间
+  keywords: ["排队"]               # 入队口令（弹幕归一化后整条相等才命中，逗号分隔可配多个）
+  contents: []                     # 可打内容关键词，如 ["通行正义","轨外","高危"]；「排队，轨外」记录要打的内容
+  gift_names: ["粉丝团灯牌"]        # 优先礼物（SEND_GIFT 礼物名精确匹配；可配多个）
+  max_rows: 50                     # OBS 名单页最多渲染行数（超出循环滚动）
+  max_users: 512                   # 队列/待用灯牌记录上限
+
+sources:
+  # 启用的源，顺序即搜索优先级
+  active: ["bilibili", "qq", "kugou", "netease", "demo"]
+  bilibili:
+    max_results: 8
+    max_duration: 900
+    cookie: ""      # B站登录 Cookie JSON 字符串（扫码登录写入，勿手改）
+  netease:
+    cookie: ""
+  qq:
+    cookie: ""
+  kugou:
+    cookie: ""
+  local:
+    music_dir: ./music
+  demo: {}

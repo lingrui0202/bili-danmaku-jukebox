@@ -1,0 +1,1211 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>B站弹幕点歌机 · 管理控制台</title>
+<style>
+  :root {
+    --pink: #FB7299; --pink-dim: #c9567a; --bg: #0b0d13; --panel: rgba(21, 25, 36, .82);
+    --card: rgba(28, 32, 43, .88); --border: rgba(255,255,255,.07); --text: #eef0f4; --sub: #9aa1b0;
+    --green: #4cc38a; --red: #f2555a; --yellow: #ffb020;
+    --grad: linear-gradient(135deg, #FB7299, #ff9a6c);
+    --shadow: 0 10px 30px rgba(0,0,0,.35);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background:
+      radial-gradient(circle at 8% -12%, rgba(251,114,153,.10), transparent 38%),
+      radial-gradient(circle at 96% 8%, rgba(255,154,108,.08), transparent 34%),
+      radial-gradient(circle at 50% 120%, rgba(92,225,230,.06), transparent 40%),
+      var(--bg);
+    color: var(--text); height: 100vh; overflow: hidden;
+    font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif; font-size: 14px;
+    display: flex;
+  }
+  ::-webkit-scrollbar { width: 9px; height: 9px; }
+  ::-webkit-scrollbar-thumb { background: rgba(255,255,255,.12); border-radius: 8px; border: 2px solid transparent; background-clip: padding-box; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,.22); background-clip: padding-box; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  button { font-family: inherit; cursor: pointer; }
+  input, select { font-family: inherit; }
+
+  /* ---------- 侧边导航 ---------- */
+  .side {
+    width: 168px; flex: none; background: var(--panel); border-right: 1px solid var(--border);
+    backdrop-filter: blur(14px);
+    display: flex; flex-direction: column; padding: 14px 10px; gap: 4px;
+  }
+  .side .logo {
+    font-size: 16px; font-weight: 800; padding: 6px 10px 14px;
+    background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent;
+    letter-spacing: .02em;
+  }
+  .side .logo small { display: block; font-size: 11px; color: var(--sub); font-weight: 400; margin-top: 2px; }
+  .nav-btn {
+    background: none; border: none; color: var(--sub); text-align: left;
+    padding: 9px 10px; border-radius: 8px; font-size: 13px; display: flex; gap: 8px; align-items: center;
+    transition: background .18s ease, color .18s ease;
+  }
+  .nav-btn:hover { background: rgba(255,255,255,.05); color: var(--text); }
+  .nav-btn.active {
+    background: linear-gradient(135deg, rgba(251,114,153,.18), rgba(255,154,108,.10));
+    color: var(--pink); box-shadow: inset 3px 0 0 var(--pink);
+  }
+  .side .foot { margin-top: auto; font-size: 11px; color: #555a64; padding: 8px 10px; line-height: 1.6; }
+
+  /* ---------- 主区 ---------- */
+  .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .topbar {
+    height: 46px; flex: none; display: flex; align-items: center; gap: 12px;
+    padding: 0 18px; border-bottom: 1px solid var(--border); background: var(--panel);
+    backdrop-filter: blur(14px);
+  }
+  .topbar .tab-title { font-weight: 600; }
+  .conn { margin-left: auto; display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--sub); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #555; }
+  .dot.on { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .dot.mock { background: var(--yellow); }
+.dot.err { background: #ff5c5c; box-shadow: 0 0 6px #ff5c5c; }
+  .content { flex: 1; overflow-y: auto; padding: 18px; display: none; }
+  .content.active { display: block; }
+
+  .card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 14px;
+    padding: 16px; margin-bottom: 14px;
+    box-shadow: var(--shadow); backdrop-filter: blur(12px);
+    transition: border-color .18s ease;
+  }
+  .card:hover { border-color: rgba(251,114,153,.22); }
+  .card h3 { font-size: 14px; margin-bottom: 12px; color: var(--text); display: flex; align-items: center; gap: 8px; }
+  .card h3 .sub { font-size: 12px; color: var(--sub); font-weight: 400; }
+  .btn {
+    background: var(--grad); color: #fff; border: none; border-radius: 8px;
+    padding: 7px 14px; font-size: 13px; font-weight: 600;
+    box-shadow: 0 4px 14px rgba(251,114,153,.25);
+    transition: filter .15s ease, transform .15s ease;
+  }
+  .btn:hover { filter: brightness(1.08); transform: translateY(-1px); }
+  .btn:active { transform: translateY(0); }
+  .btn.ghost { background: transparent; border: 1px solid var(--border); color: var(--sub); box-shadow: none; transition: all .15s ease; }
+  .btn.ghost:hover { color: var(--text); border-color: var(--pink); background: rgba(251,114,153,.08); }
+  .btn.sm { padding: 4px 10px; font-size: 12px; border-radius: 6px; }
+  .btn.danger { background: transparent; border: 1px solid var(--red); color: var(--red); box-shadow: none; }
+  .btn.danger:hover { background: rgba(242,85,90,.12); }
+  .btn:disabled { opacity: .5; cursor: not-allowed; transform: none; }
+  input[type=text], input[type=number], select {
+    background: rgba(13,16,23,.7); border: 1px solid var(--border); color: var(--text);
+    border-radius: 8px; padding: 7px 10px; font-size: 13px; outline: none; transition: border-color .15s ease, box-shadow .15s ease;
+  }
+  input:focus, select:focus { border-color: var(--pink); box-shadow: 0 0 0 3px rgba(251,114,153,.12); }
+  label { font-size: 12px; color: var(--sub); }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+  /* ---------- 正在播放 ---------- */
+  .np { display: flex; gap: 16px; align-items: center; }
+  .np .cover {
+    width: 96px; height: 96px; border-radius: 12px; flex: none;
+    background: linear-gradient(135deg, #262a35, #1a1e28) center/cover no-repeat; display: flex; align-items: center; justify-content: center;
+    color: #3a3d45; font-size: 30px;
+    box-shadow: 0 6px 20px rgba(0,0,0,.4), inset 0 0 0 1px rgba(255,255,255,.06);
+  }
+  .np .meta { flex: 1; min-width: 0; }
+  .np .meta .t { font-size: 18px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .np .meta .a { color: var(--sub); margin-top: 3px; }
+  .np .meta .by { color: var(--sub); font-size: 12px; margin-top: 3px; }
+  .np-controls { display: flex; gap: 8px; margin-top: 14px; align-items: center; flex-wrap: wrap; }
+  .np-controls input[type=range] { flex: 1; min-width: 140px; accent-color: var(--pink); }
+  .badge {
+    font-size: 11px; padding: 2px 8px; border-radius: 10px; display: inline-block;
+    background: rgba(251,114,153,.14); color: var(--pink); border: 1px solid rgba(251,114,153,.35);
+  }
+  .badge.warn { background: rgba(255,176,32,.12); color: var(--yellow); border-color: rgba(255,176,32,.35); }
+  .badge.gray { background: rgba(255,255,255,.05); color: var(--sub); border-color: var(--border); }
+
+  /* ---------- 列表 ---------- */
+  .list { display: flex; flex-direction: column; gap: 8px; }
+  .item {
+    display: flex; gap: 10px; align-items: center; padding: 8px 10px;
+    background: rgba(20,23,30,.85); border: 1px solid var(--border); border-radius: 10px;
+    transition: border-color .15s ease, transform .15s ease;
+  }
+  .item:hover { border-color: rgba(251,114,153,.28); transform: translateX(2px); }
+  .item .cover { width: 42px; height: 42px; border-radius: 6px; flex: none; background: #22252d center/cover no-repeat; }
+  .item .meta { flex: 1; min-width: 0; }
+  .item .meta .t { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .item .meta .s { font-size: 12px; color: var(--sub); margin-top: 2px; }
+  .item .ops { display: flex; gap: 4px; flex: none; }
+  .pin-flag { color: var(--yellow); font-size: 12px; }
+  .fail-flag { color: var(--red); font-size: 12px; }
+  .hot-row { display: flex; justify-content: space-between; padding: 6px 4px; border-bottom: 1px dashed var(--border); font-size: 13px; }
+  .hot-row:last-child { border-bottom: none; }
+  .hot-row .cnt { color: var(--pink); }
+
+  /* ---------- 日志 ---------- */
+  .log-line { padding: 6px 10px; border-radius: 8px; font-size: 13px; margin-bottom: 6px; background: #14171e; border: 1px solid var(--border); }
+  .log-line .ts { color: #555a64; font-size: 11px; margin-right: 8px; font-variant-numeric: tabular-nums; }
+  .log-line .who { color: var(--sub); margin-right: 6px; }
+  .log-line.danmu { border-left: 3px solid #3b82f6; }
+  .log-line.request { border-left: 3px solid var(--green); }
+  .log-line.system { border-left: 3px solid var(--sub); }
+  .log-line.error { border-left: 3px solid var(--red); }
+  .medal { font-size: 10px; background: linear-gradient(135deg,#fb7299,#ff9a6c); color: #fff; border-radius: 4px; padding: 1px 5px; margin-right: 6px; }
+  .result { min-height: 20px; padding: 8px 10px; border-radius: 8px; font-size: 12px; color: var(--sub); background: rgba(20,23,30,.85); border: 1px solid var(--border); line-height: 1.5; word-break: break-all; }
+  .result.ok { color: var(--green); border-color: rgba(76,195,138,.35); }
+  .result.err { color: var(--red); border-color: rgba(242,85,90,.35); }
+
+  /* ---------- 音源 ---------- */
+  .src-item { display: flex; gap: 12px; align-items: center; padding: 10px 12px; background: rgba(20,23,30,.85); border: 1px solid var(--border); border-radius: 10px; margin-bottom: 8px; transition: border-color .15s ease; }
+  .src-item:hover { border-color: rgba(251,114,153,.28); }
+  .src-item .name { width: 110px; flex: none; font-weight: 600; }
+  .src-item .name small { display: block; font-weight: 400; color: var(--sub); font-size: 11px; }
+  .src-item .stat { flex: 1; font-size: 12px; color: var(--sub); min-width: 0; }
+  .src-item .ops { display: flex; gap: 4px; align-items: center; flex: none; }
+  .switch { position: relative; width: 38px; height: 20px; flex: none; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .slider-t {
+    position: absolute; inset: 0; border-radius: 20px; background: #2a2d35; transition: .2s; cursor: pointer;
+  }
+  .slider-t::before {
+    content: ""; position: absolute; width: 16px; height: 16px; border-radius: 50%;
+    left: 2px; top: 2px; background: #fff; transition: .2s;
+  }
+  .switch input:checked + .slider-t { background: var(--pink); }
+  .switch input:checked + .slider-t::before { transform: translateX(18px); }
+  .login-badge { font-size: 11px; padding: 2px 8px; border-radius: 10px; }
+  .login-badge.yes { background: rgba(76,195,138,.12); color: var(--green); border: 1px solid rgba(76,195,138,.3); }
+  .login-badge.no { background: rgba(255,255,255,.04); color: var(--sub); border: 1px solid var(--border); }
+  .platform-card { display: flex; gap: 10px; align-items: center; padding: 10px 12px; background: rgba(20,23,30,.85); border: 1px solid var(--border); border-radius: 10px; margin-bottom: 8px; transition: border-color .15s ease; }
+  .platform-card:hover { border-color: rgba(251,114,153,.28); }
+  .platform-card .p-name { width: 90px; font-weight: 600; flex: none; }
+
+  /* ---------- 弹窗 ---------- */
+  .modal-mask {
+    position: fixed; inset: 0; background: rgba(0,0,0,.65); display: none;
+    align-items: center; justify-content: center; z-index: 100; backdrop-filter: blur(4px);
+  }
+  .modal-mask.show { display: flex; }
+  .modal {
+    background: var(--card); border: 1px solid var(--border); border-radius: 16px;
+    width: 360px; max-width: 92vw; max-height: 86vh; overflow-y: auto; padding: 20px;
+    box-shadow: 0 24px 60px rgba(0,0,0,.5); backdrop-filter: blur(16px);
+  }
+  .modal h3 { margin-bottom: 14px; font-size: 15px; }
+  .qr-box { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+  .qr-box img { width: 200px; height: 200px; background: #fff; border-radius: 8px; padding: 8px; }
+  .qr-status { font-size: 13px; color: var(--sub); text-align: center; min-height: 20px; }
+  .qr-status.scanned { color: var(--yellow); }
+  .qr-status.done { color: var(--green); }
+  .qr-status.expired { color: var(--red); }
+  .modal .ops { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+
+  /* ---------- 歌词预览 ---------- */
+  .lyric-body { max-height: 300px; overflow-y: auto; padding: 8px 4px; }
+  .lyric-line { padding: 5px 8px; font-size: 13px; color: var(--sub); border-radius: 6px; }
+  .lyric-line.active { color: var(--pink); font-weight: 600; background: rgba(251,114,153,.08); }
+
+  /* 队列拖动排序反馈 */
+  #queue-list .item[draggable="true"] { cursor: grab; }
+  #queue-list .item.dragging { opacity: .45; }
+  #queue-list .item.drag-over { outline: 1px dashed var(--pink); outline-offset: -1px; }
+  .lyric-plain { white-space: pre-wrap; font-size: 13px; color: var(--sub); line-height: 1.8; }
+
+  .tip { font-size: 12px; color: var(--sub); line-height: 1.8; }
+  .tip code { background: rgba(251,114,153,.1); color: var(--pink); padding: 1px 5px; border-radius: 4px; }
+  .form-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+  .form-grid .field { display: flex; flex-direction: column; gap: 4px; }
+  .form-grid .field.wide { grid-column: 1 / -1; }
+  .toast {
+    position: fixed; top: 56px; left: 50%; transform: translateX(-50%);
+    background: var(--card); border: 1px solid var(--pink); color: var(--text);
+    padding: 8px 18px; border-radius: 20px; font-size: 13px; z-index: 200;
+    opacity: 0; transition: opacity .25s; pointer-events: none; max-width: 80vw;
+  }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<nav class="side">
+  <div class="logo">弹幕点歌机<small>bili-danmaku-jukebox</small></div>
+  <button class="nav-btn active" data-tab="play">&#127925; 正在播放</button>
+  <button class="nav-btn" data-tab="request">&#128229; 点歌台</button>
+  <button class="nav-btn" data-tab="queue">&#128203; 队列榜单</button>
+  <button class="nav-btn" data-tab="lq">&#127903; 直播排队</button>
+  <button class="nav-btn" data-tab="log">&#128172; 弹幕日志</button>
+  <button class="nav-btn" data-tab="sources">&#128268; 音源与登录</button>
+  <button class="nav-btn" data-tab="settings">&#9881;&#65039; 设置</button>
+  <div class="foot">端口 <span id="foot-port">8788</span><br>配置仅写 settings.json</div>
+</nav>
+
+<div class="main">
+  <div class="topbar">
+    <span class="tab-title" id="tab-title">正在播放</span>
+    <div class="conn"><span class="dot" id="ws-dot"></span><span id="ws-text">连接中…</span>
+      <span style="margin-left:14px" class="dot" id="dm-dot"></span><span id="dm-text">弹幕 --</span>
+    </div>
+  </div>
+
+  <!-- 正在播放 -->
+  <div class="content active" id="tab-play">
+    <div class="card">
+      <h3>&#127925; 正在播放 <span class="sub" id="np-total"></span></h3>
+      <div class="np" id="np-box">
+        <div class="cover" id="np-cover">&#9835;</div>
+        <div class="meta">
+          <div class="t" id="np-title">暂无播放</div>
+          <div class="a" id="np-artist">--</div>
+          <div class="by" id="np-by">--</div>
+          <div id="np-badges" style="margin-top:6px"></div>
+        </div>
+      </div>
+      <div class="np-controls">
+        <button class="btn ghost sm" id="btn-prev">&#9198; 上一首</button>
+        <button class="btn sm" id="btn-toggle">&#9208; 暂停</button>
+        <button class="btn ghost sm" id="btn-next">&#9197; 下一首</button>
+        <input type="range" id="np-seek" min="0" max="100" value="0">
+        <span class="tip" id="np-time" style="font-variant-numeric:tabular-nums">0:00 / 0:00</span>
+      </div>
+    </div>
+    <div class="card">
+      <h3>&#128161; 使用提示</h3>
+      <div class="tip">
+        1. 观众在直播间发送 <code>点歌 歌名</code> 即可点歌（求歌/来首/我想听 均可）；<br>
+        2. 可指定音源：<code>点歌 qq 七里香</code>、<code>点歌 b站 海阔天空</code>；<br>
+        3. <code>切歌</code> / <code>点歌列表</code> / <code>点歌帮助</code> 查看指令；<br>
+        4. OBS 浏览器源：播放页 <code>/obs</code>，歌词页 <code>/stage</code>，排队名单页 <code>/queue</code>（「直播排队」标签页管理）；<br>
+        5. 本页在本地浏览器打开即可，所有配置实时热生效。
+      </div>
+    </div>
+  </div>
+
+  <!-- 点歌台 -->
+  <div class="content" id="tab-request">
+    <div class="card">
+      <h3>&#128269; 搜索点歌</h3>
+      <div class="row">
+        <input type="text" id="search-kw" placeholder="歌名 / 歌手，如：海阔天空" style="flex:1;min-width:200px" onkeydown="if(event.key==='Enter')doSearch()">
+        <select id="search-src">
+          <option value="">全部音源</option>
+        </select>
+        <button class="btn" onclick="doSearch()">搜索</button>
+      </div>
+      <div class="list" id="search-results" style="margin-top:12px"></div>
+    </div>
+    <div class="card">
+      <h3>&#128172; 模拟弹幕 <span class="sub">不开播也能测：live / mock 模式下都可直接发指令</span></h3>
+      <div class="row">
+        <input type="text" id="mock-text" placeholder="弹幕内容，如：点歌 海阔天空" style="flex:1;min-width:220px" onkeydown="if(event.key==='Enter')doMockDanmu()">
+        <input type="text" id="mock-uname" placeholder="昵称" style="width:110px" value="测试用户">
+        <input type="text" id="mock-uid" placeholder="UID" style="width:80px" value="10001">
+        <button class="btn" onclick="doMockDanmu()">发送</button>
+      </div>
+      <div class="tip" id="mock-msg" style="margin-top:8px;min-height:18px"></div>
+    </div>
+    <div class="card">
+      <h3>&#127881; 快捷指令</h3>
+      <div class="row">
+        <button class="btn ghost sm" onclick="mockFill('点歌 海阔天空')">点歌 海阔天空</button>
+        <button class="btn ghost sm" onclick="mockFill('点歌 qq 七里香')">点歌 qq 七里香</button>
+        <button class="btn ghost sm" onclick="mockFill('点歌列表')">点歌列表</button>
+        <button class="btn ghost sm" onclick="mockFill('点歌帮助')">点歌帮助</button>
+        <button class="btn ghost sm" onclick="mockFill('切歌')">切歌</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 队列榜单 -->
+  <div class="content" id="tab-queue">
+    <div class="card">
+      <h3>&#128203; 待播队列 <span class="sub" id="queue-count"></span></h3>
+      <div class="list" id="queue-list"></div>
+      <div class="row" style="margin-top:10px">
+        <button class="btn danger sm" onclick="doControl('clear')">清空队列</button>
+      </div>
+    </div>
+    <div class="card">
+      <h3>&#128293; 热歌榜 TOP10</h3>
+      <div id="hot-list"></div>
+    </div>
+    <div class="card">
+      <h3>&#128220; 播放历史</h3>
+      <div class="list" id="history-list"></div>
+    </div>
+  </div>
+
+  <!-- 弹幕日志 -->
+  <div class="content" id="tab-log">
+    <div class="card">
+      <h3>&#128172; 弹幕日志 <span class="sub">最近 100 条</span></h3>
+      <div id="log-list"></div>
+    </div>
+  </div>
+
+  <!-- 音源与登录 -->
+  <div class="content" id="tab-sources">
+    <div class="card">
+      <h3>&#128268; 歌曲源 <span class="sub">开关 + 优先级排序（顺序即搜索优先级）</span></h3>
+      <div id="source-list"></div>
+      <div class="tip" id="cache-stats" style="margin-top:10px"></div>
+    </div>
+    <div class="card">
+      <h3>&#128274; 平台登录 <span class="sub">扫码登录后可播放付费/会员歌曲</span></h3>
+      <div id="platform-list"></div>
+      <label style="display:flex;align-items:center;gap:8px;margin-top:10px;cursor:pointer">
+        <input type="checkbox" id="keep-login" onchange="doKeepLogin(this.checked)" checked>
+        <span>重启后保留登录状态</span>
+      </label>
+      <div class="tip">登录态保存在服务端 cache/settings.json；Cookie 不会回传给前端。</div>
+    </div>
+  </div>
+
+  <!-- 设置 -->
+  <div class="content" id="tab-settings">
+    <div class="card">
+      <h3>&#128250; 直播间</h3>
+      <div class="row">
+        <select id="set-mode">
+          <option value="mock">mock（模拟弹幕，不连B站）</option>
+          <option value="live">live（连 B站直播间）</option>
+        </select>
+        <input type="text" id="set-room" placeholder="直播间房间号（live.bilibili.com/ 后数字）" style="width:280px">
+        <button class="btn" onclick="doReconnect()">保存并重连</button>
+      </div>
+      <div class="tip" style="margin-top:8px">切换为 live 模式后，观众在直播间的弹幕将实时驱动点歌。</div>
+    </div>
+    <div class="card">
+      <h3>&#128220; 点歌规则</h3>
+      <div class="form-grid">
+        <div class="field wide"><label>点歌指令前缀（逗号分隔，最长匹配优先）</label>
+          <input type="text" id="set-prefixes"></div>
+        <div class="field wide"><label>关键词黑名单（逗号分隔，子串命中即拒）</label>
+          <input type="text" id="set-blacklist"></div>
+        <div class="field"><label>用户冷却（秒）</label><input type="number" id="set-user-cd" min="0"></div>
+        <div class="field"><label>歌曲冷却（分钟）</label><input type="number" id="set-song-cd" min="0"></div>
+        <div class="field"><label>队列上限</label><input type="number" id="set-max-queue" min="0"></div>
+        <div class="field"><label>每人队列上限</label><input type="number" id="set-max-per-user" min="0"></div>
+        <div class="field"><label>歌曲时长上限（分钟）</label><input type="number" id="set-max-dur" min="1"></div>
+        <div class="field"><label>&nbsp;</label>
+          <label style="display:flex;gap:6px;align-items:center;color:var(--text)">
+            <input type="checkbox" id="set-allow-skip"> 允许观众弹幕「切歌」</label></div>
+      </div>
+      <div class="row" style="margin-top:12px"><button class="btn" onclick="saveRules()">保存点歌规则</button></div>
+    </div>
+    <div class="card">
+      <h3>&#9881;&#65039; 其他</h3>
+      <label style="display:flex;gap:6px;align-items:center;color:var(--text);margin-bottom:10px">
+        <input type="checkbox" id="set-keep-state"> 关闭服务后保留播放列表（重启后续播）
+      </label>
+      <div class="row" style="margin-bottom:12px">
+        <label>服务端口（只读，改端口需改 config.yaml 后重启）</label>
+        <input type="text" id="set-port" disabled style="width:90px">
+      </div>
+      <div class="row">
+        <button class="btn" onclick="saveKeepState()">保存</button>
+        <button class="btn danger" onclick="resetSettings()">恢复默认设置</button>
+      </div>
+      <div class="tip" style="margin-top:10px" id="settings-note"></div>
+    </div>
+  </div>
+
+  <!-- 直播排队 -->
+  <div class="content" id="tab-lq">
+    <div class="grid2">
+      <div class="card">
+        <h3>&#127903; 当前队列 <span class="sub" id="lq-queue-count"></span></h3>
+        <div class="row" style="margin-bottom:10px">
+          <button class="btn" onclick="lqCmd('next')">&#128073; 下一位</button>
+          <button class="btn ghost" onclick="lqRefresh()">&#8635; 刷新</button>
+          <button class="btn danger" onclick="lqClear()">&#128465; 清空队列</button>
+        </div>
+        <div class="row" style="margin-bottom:10px">
+          <span class="badge">排队 <b id="lq-count">0</b></span>
+          <span class="badge gray">已叫号 <b id="lq-served">0</b></span>
+          <span class="badge gray">待用灯牌 <b id="lq-pending-count">0</b></span>
+          <span class="badge gray" id="lq-room">直播间 --</span>
+        </div>
+        <div class="list" id="lq-list"><div class="tip">暂无排队用户</div></div>
+      </div>
+      <div>
+        <div class="card">
+          <h3>&#9881;&#65039; 排队规则</h3>
+          <div class="row" style="margin-bottom:8px">
+            <label style="width:76px">入队口令</label>
+            <input type="text" id="lq-keywords" placeholder="排队（逗号分隔可配多个）" style="flex:1">
+            <button class="btn sm" onclick="lqSaveRules()">保存</button>
+          </div>
+          <div class="row" style="margin-bottom:8px">
+            <label style="width:76px">可打内容</label>
+            <input type="text" id="lq-contents" placeholder="通行正义,轨外,高危（可为空）" style="flex:1">
+            <button class="btn sm" onclick="lqSaveRules()">保存</button>
+          </div>
+          <div class="row" style="margin-bottom:8px">
+            <label style="width:76px">优先礼物</label>
+            <input type="text" id="lq-gifts" placeholder="粉丝团灯牌（逗号分隔可配多个）" style="flex:1">
+            <button class="btn sm" onclick="lqSaveRules()">保存</button>
+          </div>
+          <div class="tip">观众发「排队」入队；「排队，轨外」会记录要打的内容；送优先礼物可插队到第 1 位（未排队则记待用资格）。直播间切换与 B 站扫码登录在「音源与登录」页统一管理。</div>
+          <div class="row" style="margin-top:8px">
+            <input type="text" id="lq-match" placeholder="测试：输入一条弹幕，如「排队，轨外」" style="flex:1" onkeydown="if(event.key==='Enter')lqMatch()">
+            <button class="btn ghost sm" onclick="lqMatch()">测试</button>
+          </div>
+        </div>
+        <div class="card">
+          <h3>&#128250; OBS 名单页 <span class="sub">/queue</span></h3>
+          <div class="row" style="margin-bottom:6px">
+            <label style="width:100px">字号 <span id="lq-font-out">36px</span></label>
+            <input type="range" id="lq-font" min="12" max="160" value="36" style="flex:1">
+          </div>
+          <div class="row" style="margin-bottom:6px">
+            <label style="width:100px">外框透明度 <span id="lq-frame-out">100%</span></label>
+            <input type="range" id="lq-frame" min="0" max="100" value="100" style="flex:1">
+          </div>
+          <div class="row" style="margin-bottom:6px">
+            <label style="width:100px">名单透明度 <span id="lq-name-out">100%</span></label>
+            <input type="range" id="lq-name" min="0" max="100" value="100" style="flex:1">
+          </div>
+          <div class="row" style="margin-bottom:6px">
+            <label style="display:flex;gap:6px;align-items:center;color:var(--text)">
+              <input type="checkbox" id="lq-priority" onchange="lqTogglePriority()"> 取消插队（灯牌不再插队）
+            </label>
+            <label style="display:flex;gap:6px;align-items:center;color:var(--text)">
+              <input type="checkbox" id="lq-autoclear" onchange="lqToggleAutoclear()"> 开播自动清空
+            </label>
+          </div>
+          <div class="tip">OBS 浏览器源地址：<code id="lq-obs-url">/queue</code>（透明背景票据式面板，人数多时循环滚动）</div>
+        </div>
+        <div class="card">
+          <h3>&#129300; 本地测试</h3>
+          <div class="row" style="margin-bottom:8px">
+            <input type="text" id="lq-test-name" value="测试观众" style="flex:1">
+            <button class="btn sm" onclick="lqTestQueue()">发送「排队」</button>
+            <button class="btn ghost sm" onclick="lqTestGift()">送灯牌</button>
+          </div>
+          <div class="row">
+            <input type="text" id="lq-cmd" placeholder="命令：add-名字-2 / del-3 / match-排队，轨外 / help" style="flex:1" onkeydown="if(event.key==='Enter')lqCmdInput()">
+            <button class="btn sm" onclick="lqCmdInput()">执行</button>
+          </div>
+          <div class="result" id="lq-result" style="margin-top:10px">等待命令</div>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <h3>&#127881; 先送灯牌的用户（待用资格）</h3>
+      <div class="list" id="lq-pending-list"><div class="tip">暂无记录</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- 扫码登录弹窗 -->
+<div class="modal-mask" id="login-modal">
+  <div class="modal">
+    <h3 id="login-title">扫码登录</h3>
+    <div class="qr-box">
+      <img id="login-qr" alt="二维码" style="display:none">
+      <div class="qr-status" id="login-status">正在获取二维码…</div>
+    </div>
+    <div class="ops">
+      <button class="btn ghost sm" id="login-refresh" onclick="startLogin(window.currentLoginSource)">刷新二维码</button>
+      <button class="btn ghost sm" onclick="closeLoginModal()">取消</button>
+    </div>
+  </div>
+</div>
+
+<!-- 歌词预览弹窗 -->
+<div class="modal-mask" id="lyric-modal">
+  <div class="modal" style="width:420px">
+    <h3 id="lyric-title">歌词预览</h3>
+    <div class="lyric-body" id="lyric-body"></div>
+    <div class="ops"><button class="btn ghost sm" onclick="closeLyricModal()">关闭</button></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+(function () {
+  "use strict";
+  var ws = null, lastState = null, sourceSig = "", dmStatus = null;
+  var loginTimer = null;
+  // 挂到 window：内联 onclick 在全局作用域求值，闭包变量读不到会导致「刷新二维码」失效
+  window.currentLoginSource = "";
+  var lyricTimer = null, lyricLines = [], lyricSong = null;
+
+  var $ = function (id) { return document.getElementById(id); };
+  var TAB_TITLES = { play: "正在播放", request: "点歌台", queue: "队列榜单", lq: "直播排队", log: "弹幕日志", sources: "音源与登录", settings: "设置" };
+
+  function fmt(s) {
+    s = Math.max(0, Math.floor(s || 0));
+    return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+  }
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+  function toast(msg) {
+    var t = $("toast"); t.textContent = msg; t.classList.add("show");
+    clearTimeout(t._h); t._h = setTimeout(function () { t.classList.remove("show"); }, 2600);
+  }
+  function api(path, body) {
+    return fetch(path, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {}),
+    }).then(function (r) { return r.json(); });
+  }
+
+  /* ---------- 导航 ---------- */
+  document.querySelectorAll(".nav-btn").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      document.querySelectorAll(".nav-btn").forEach(function (b) { b.classList.remove("active"); });
+      document.querySelectorAll(".content").forEach(function (c) { c.classList.remove("active"); });
+      btn.classList.add("active");
+      $("tab-" + btn.dataset.tab).classList.add("active");
+      $("tab-title").textContent = TAB_TITLES[btn.dataset.tab] || "";
+      if (btn.dataset.tab === "sources") sourceSig = "";
+    });
+  });
+
+  /* ---------- WebSocket ---------- */
+  function connectWs() {
+    var proto = location.protocol === "https:" ? "wss://" : "ws://";
+    ws = new WebSocket(proto + location.host + "/ws");
+    ws.onopen = function () { $("ws-dot").classList.add("on"); $("ws-text").textContent = "已连接"; };
+    ws.onclose = function () {
+      $("ws-dot").classList.remove("on"); $("ws-text").textContent = "重连中…";
+      setTimeout(connectWs, 2000);
+    };
+    ws.onerror = function () { try { ws.close(); } catch (e) {} };
+    ws.onmessage = function (ev) {
+      var msg;
+      try { msg = JSON.parse(ev.data); } catch (e) { return; }
+      if (msg.type === "state") { lastState = msg.data; render(msg.data); }
+      else if (msg.type === "danmaku_status") { dmStatus = msg.data; renderDanmuStatus(); }
+      else if (msg.type === "danmu_log") { appendLog(msg.data); }
+      else if (msg.type === "live_queue") { lqRender(msg.data); }
+      else if (msg.type === "toast") { toast(msg.data && msg.data.msg); }
+    };
+  }
+
+  function refreshDanmuStatus() {
+    // 注意：必须用 POST 调 POST 端点（GET 会 405，且 405 响应体会被当数据解析）
+    api("/api/danmu-status", {}).then(function (d) { dmStatus = d; renderDanmuStatus(); }).catch(function () {});
+  }
+  function renderDanmuStatus() {
+    if (!dmStatus) return;
+    var dot = $("dm-dot"), text = $("dm-text");
+    if (dmStatus.mode === "mock") {
+      dot.className = "dot mock";
+      text.textContent = "模拟弹幕模式 · 收到 " + (dmStatus.total_received || 0) + " 条";
+    } else if (dmStatus.connected) {
+      dot.className = "dot on";
+      var txt = "直播间 " + (dmStatus.room_id || "?") + " · 已连接 (" + (dmStatus.total_received || 0) + ")";
+      // 已连上但直播间没开播：收不到弹幕是正常的，明确提示避免误以为没连上
+      // 未开播时收不到真实弹幕，提示直接用模拟弹幕测试，避免误以为连接坏了
+      if (dmStatus.live_status === 0) txt += " · 直播未开播（真实弹幕待开播，测试请用「模拟弹幕」）";
+      text.textContent = txt;
+    } else if (dmStatus.error) {
+      dot.className = "dot err";
+      text.textContent = "直播间 " + (dmStatus.room_id || "?") + " · " + dmStatus.error;
+    } else {
+      dot.className = "dot";
+      text.textContent = "直播间 " + (dmStatus.room_id || "?") + " · 连接中…";
+    }
+  }
+
+  /* ---------- 渲染 ---------- */
+  function render(st) {
+    renderPlay(st); renderQueue(st); renderSources(st); renderSettingsValues(st);
+  }
+
+  function renderPlay(st) {
+    var cur = st.current;
+    $("np-total").textContent = "累计点歌 " + (st.total_requested || 0) + " 首";
+    if (!cur) {
+      $("np-title").textContent = "暂无播放";
+      $("np-artist").textContent = "--";
+      $("np-by").textContent = "--";
+      $("np-badges").innerHTML = "";
+      $("np-cover").style.backgroundImage = "none";
+      $("np-cover").textContent = "\u266B";
+      $("np-time").textContent = "0:00 / 0:00";
+      $("np-seek").value = 0;
+      $("btn-toggle").innerHTML = "&#9208; 暂停";
+      return;
+    }
+    $("np-title").textContent = cur.title || "";
+    $("np-artist").textContent = cur.artist || "";
+    $("np-by").textContent = "点歌人：" + (cur.requested_by || "--");
+    if (cur.cover) { $("np-cover").style.backgroundImage = "url('" + cur.cover + "')"; $("np-cover").textContent = ""; }
+    var badges = "";
+    if (cur.source) badges += '<span class="badge gray">' + esc(cur.source) + "</span> ";
+    if (cur.trial) badges += '<span class="badge warn">' + esc(cur.trial_note || "试听片段") + "</span>";
+    if (cur.pinned) badges += '<span class="badge">置顶</span>';
+    if (cur.failed) badges += '<span class="badge warn">播放失败</span>';
+    $("np-badges").innerHTML = badges;
+    var dur = cur.duration || 0, prog = cur.progress || 0;
+    $("np-time").textContent = fmt(prog) + " / " + fmt(dur);
+    $("np-seek").max = Math.max(1, Math.floor(dur));
+    $("np-seek").value = Math.floor(prog);
+    $("btn-toggle").innerHTML = cur.paused ? "&#9654; 播放" : "&#9208; 暂停";
+  }
+
+  function renderQueue(st) {
+    $("queue-count").textContent = "共 " + (st.queue || []).length + " 首 · 上限 " + st.jukebox_cfg.max_queue_length;
+    var html = "";
+    (st.queue || []).forEach(function (it, i) {
+      html += '<div class="item" draggable="true" data-idx="' + i + '">' +
+        '<div class="cover" style="' + (it.cover ? "background-image:url('" + it.cover + "')" : "") + '"></div>' +
+        '<div class="meta"><div class="t">' + (i + 1) + ". " + esc(it.display) +
+        (it.pinned ? ' <span class="pin-flag">&#128204;</span>' : "") +
+        (it.failed ? ' <span class="fail-flag">&#9888;</span>' : "") +
+        (it.trial ? ' <span class="badge warn">' + esc(it.trial_note || "试听") + "</span>" : "") +
+        "</div>" +
+        '<div class="s">点歌人：' + esc(it.requested_by) + " · " + esc(it.source) + " · " + fmt(it.duration) + "</div></div>" +
+        '<div class="ops">' +
+        '<button class="btn ghost sm" onclick="queueOp(\'pin\',' + i + ')" title="置顶">&#128204;</button>' +
+        '<button class="btn ghost sm" onclick="queueOp(\'play_now\',' + i + ')" title="插播">&#9199;</button>' +
+        '<button class="btn ghost sm" onclick="queueOp(\'move\',' + i + ',' + Math.max(0, i - 1) + ')" title="上移">&#11014;</button>' +
+        '<button class="btn ghost sm" onclick="queueOp(\'move\',' + i + ',' + (i + 1) + ')" title="下移">&#11015;</button>' +
+        '<button class="btn ghost sm" onclick="previewLyric(\'' + esc(it.source) + "','" + esc(it.id) + '\')" title="歌词">&#127903;</button>' +
+        '<button class="btn ghost sm" onclick="queueOp(\'remove\',' + i + ')" title="删除">&#10006;</button>' +
+        "</div></div>";
+    });
+    if (!html) html = '<div class="tip">队列空空的~</div>';
+    $("queue-list").innerHTML = html;
+
+    var hot = "";
+    (st.hot_songs || []).forEach(function (h, i) {
+      hot += '<div class="hot-row"><span>' + (i + 1) + ". " + esc(h.name) + '</span><span class="cnt">' + h.count + " 次</span></div>";
+    });
+    $("hot-list").innerHTML = hot || '<div class="tip">还没有数据</div>';
+
+    var his = "";
+    (st.history || []).slice(0, 30).forEach(function (it) {
+      his += '<div class="item"><div class="meta"><div class="t">' + esc(it.display) + '</div><div class="s">' + esc(it.requested_by) + " · " + esc(it.source) + "</div></div></div>";
+    });
+    $("history-list").innerHTML = his || '<div class="tip">暂无历史</div>';
+  }
+
+  function renderSources(st) {
+    // JSON 签名防每秒重绘导致滑块闪烁
+    var sig = JSON.stringify(st.sources || []) + JSON.stringify(st.active_sources || []) + JSON.stringify(st.cache_stats || {});
+    if (sig === sourceSig) return;
+    sourceSig = sig;
+
+    var active = st.active_sources || [];
+    // 按优先级排序显示：启用的源在前（按 active 顺序），未启用的在后
+    var ordered = (st.sources || []).slice().sort(function (a, b) {
+      var ia = active.indexOf(a.name), ib = active.indexOf(b.name);
+      if (ia >= 0 && ib >= 0) return ia - ib;
+      if (ia >= 0) return -1;
+      if (ib >= 0) return 1;
+      return 0;
+    });
+    var html = "";
+    ordered.forEach(function (s) {
+      var on = active.indexOf(s.name) >= 0;
+      var stat = [];
+      if (s.name === "local") stat.push("曲目 " + (s.count || 0) + " · " + esc(s.music_dir || ""));
+      if (s.name === "bilibili") stat.push("max_results=" + s.max_results + " max_duration=" + s.max_duration);
+      if (s.name === "demo") stat.push("离线可用 · " + (s.count || 0) + " 首内置");
+      if (s.logged_in !== undefined) stat.push(s.logged_in ? "已登录" : "未登录");
+      html += '<div class="src-item">' +
+        '<label class="switch"><input type="checkbox" ' + (on ? "checked" : "") + ' onchange="toggleSource(\'' + s.name + '\',this.checked)"><span class="slider-t"></span></label>' +
+        '<div class="name">' + esc(s.label || s.name) + "<small>" + esc(s.name) + "</small></div>" +
+        '<div class="stat">' + stat.join(" · ") + "</div>" +
+        '<div class="ops">' +
+        '<button class="btn ghost sm" onclick="moveSource(\'' + s.name + '\',-1)" title="提高优先级">&#11014;</button>' +
+        '<button class="btn ghost sm" onclick="moveSource(\'' + s.name + '\',1)" title="降低优先级">&#11015;</button>' +
+        "</div></div>";
+    });
+    $("source-list").innerHTML = html;
+    var cs = st.cache_stats;
+    $("cache-stats").textContent = cs
+      ? "搜索缓存：" + cs.size + " 条 · 命中率 " + Math.round((cs.hit_rate || 0) * 100) + "%（hits " + cs.hits + " / misses " + cs.misses + "）"
+      : "";
+
+    // 平台登录卡
+    var plats = "";
+    ["bilibili", "qq", "kugou", "netease"].forEach(function (name) {
+      var s = (st.sources || []).filter(function (x) { return x.name === name; })[0] || {};
+      var labels = { bilibili: "B站", qq: "QQ音乐", kugou: "酷狗", netease: "网易云" };
+      plats += '<div class="platform-card">' +
+        '<span class="p-name">' + labels[name] + "</span>" +
+        '<span class="login-badge ' + (s.logged_in ? "yes" : "no") + '">' + (s.logged_in ? "已登录" : "未登录") + "</span>" +
+        '<div style="flex:1"></div>' +
+        (s.logged_in
+          ? '<button class="btn ghost sm" onclick="doLogout(\'' + name + '\')">退出登录</button>' +
+            '<button class="btn ghost sm" onclick="doManualCookie(\'' + name + '\')">更新Cookie</button>'
+          : '<button class="btn sm" onclick="startLogin(\'' + name + '\')">扫码登录</button>' +
+            '<button class="btn ghost sm" onclick="doManualCookie(\'' + name + '\')">粘贴Cookie</button>') +
+        "</div>";
+    });
+    $("platform-list").innerHTML = plats;
+  }
+
+  function renderSettingsValues(st) {
+    if (document.activeElement && document.activeElement.tagName === "INPUT" && document.activeElement.closest("#tab-settings")) return;
+    var c = st.jukebox_cfg || {};
+    if (!$("set-prefixes").value) $("set-prefixes").value = (c.request_prefixes || []).join(",");
+    if (!$("set-blacklist").value) $("set-blacklist").value = (c.blacklist || []).join(",");
+    if (document.activeElement !== $("set-user-cd")) $("set-user-cd").value = c.user_cooldown_seconds;
+    if (document.activeElement !== $("set-song-cd")) $("set-song-cd").value = c.song_cooldown_minutes;
+    if (document.activeElement !== $("set-max-queue")) $("set-max-queue").value = c.max_queue_length;
+    if (document.activeElement !== $("set-max-per-user")) $("set-max-per-user").value = c.max_per_user_queue;
+    if (document.activeElement !== $("set-max-dur")) $("set-max-dur").value = Math.round((c.max_song_duration || 900) / 60);
+    $("set-allow-skip").checked = !!c.allow_user_skip;
+    $("set-keep-state").checked = !!c.keep_state_on_exit;
+    $("set-port").value = $("foot-port").textContent;
+  }
+
+  var logCount = 0;
+  function appendLog(entry) {
+    if (!entry) return;
+    logCount++;
+    if (logCount > 100) {
+      while ($("log-list").children.length > 100) $("log-list").removeChild($("log-list").lastChild);
+    }
+    var div = document.createElement("div");
+    div.className = "log-line " + (entry.kind || "system");
+    var ts = new Date((entry.ts || 0) * 1000);
+    var hh = String(ts.getHours()).padStart(2, "0"), mm = String(ts.getMinutes()).padStart(2, "0"), ss = String(ts.getSeconds()).padStart(2, "0");
+    var who = "";
+    if (entry.uname) {
+      who = '<span class="who">' + esc(entry.uname) + (entry.medal_level ? ' <span class="medal">' + entry.medal_level + "</span>" : "") + "</span>";
+    }
+    div.innerHTML = '<span class="ts">' + hh + ":" + mm + ":" + ss + "</span>" + who + esc(entry.msg || "");
+    $("log-list").insertBefore(div, $("log-list").firstChild);
+  }
+
+  /* ---------- 点歌台 ---------- */
+  window.doSearch = function () {
+    var kw = $("search-kw").value.trim();
+    if (!kw) { toast("请输入关键词"); return; }
+    api("/api/search", { keyword: kw, source: $("search-src").value }).then(function (d) {
+      var html = "";
+      (d.results || []).forEach(function (r) {
+        html += '<div class="item">' +
+          '<div class="cover" style="' + (r.cover ? "background-image:url('" + r.cover + "')" : "") + '"></div>' +
+          '<div class="meta"><div class="t">' + esc(r.display) +
+          (r.trial ? ' <span class="badge warn">' + esc(r.trial_note || "试听") + "</span>" : "") +
+          "</div>" +
+          '<div class="s">' + esc(r.source) + " · " + fmt(r.duration) + "</div></div>" +
+          '<div class="ops">' +
+          '<button class="btn sm" onclick=\'addSong(' + JSON.stringify(JSON.stringify(r)) + ')\'>点 Ta</button>' +
+          "</div></div>";
+      });
+      if (!html) html = '<div class="tip">没有搜索结果，换个关键词试试~</div>';
+      $("search-results").innerHTML = html;
+    });
+  };
+  window.addSong = function (rJson) {
+    var r = JSON.parse(rJson);
+    api("/api/add", r).then(function (d) { toast(d.msg || (d.ok ? "已入队" : "失败")); });
+  };
+
+  window.mockFill = function (text) {
+    $("mock-text").value = text;
+    doMockDanmu();
+  };
+  window.doMockDanmu = function () {
+    var text = $("mock-text").value.trim();
+    if (!text) { toast("请输入弹幕内容"); return; }
+    api("/api/mock-danmu", {
+      text: text,
+      uname: $("mock-uname").value.trim() || "测试用户",
+      uid: parseInt($("mock-uid").value) || 0,
+    }).then(function (d) {
+      $("mock-msg").textContent = (d.ok ? "" : "失败：") + (d.msg || "");
+    });
+  };
+
+  /* ---------- 播放控制 ---------- */
+  function doControl(action, extra) {
+    var b = { action: action };
+    if (extra) Object.keys(extra).forEach(function (k) { b[k] = extra[k]; });
+    api("/api/control", b);
+  }
+  window.doControl = doControl;
+  $("btn-toggle").addEventListener("click", function () {
+    if (lastState && lastState.current && lastState.current.paused) doControl("resume");
+    else doControl("pause");
+  });
+  $("btn-next").addEventListener("click", function () { doControl("skip"); });
+  $("btn-prev").addEventListener("click", function () { doControl("skip"); toast("上一首=切歌（直播场景不停摆）"); });
+  $("np-seek").addEventListener("change", function () { doControl("seek", { sec: parseInt(this.value) || 0 }); });
+
+  /* ---------- 队列操作 ---------- */
+  window.queueOp = function (action, index, newIndex) {
+    var body = { action: action, index: index };
+    if (newIndex !== undefined) body.new_index = newIndex;
+    api("/api/control", body);
+  };
+
+  /* ---------- 队列拖动排序 ---------- */
+  (function initQueueDnD() {
+    var listEl = $("queue-list");
+    if (!listEl) return;
+    var dragIdx = -1;
+    listEl.addEventListener("dragstart", function (e) {
+      var item = e.target.closest && e.target.closest(".item");
+      if (!item) return;
+      dragIdx = parseInt(item.getAttribute("data-idx"), 10);
+      e.dataTransfer.effectAllowed = "move";
+      try { e.dataTransfer.setData("text/plain", String(dragIdx)); } catch (err) {}
+      item.classList.add("dragging");
+    });
+    listEl.addEventListener("dragend", function () {
+      dragIdx = -1;
+      listEl.querySelectorAll(".item").forEach(function (el) {
+        el.classList.remove("dragging");
+        el.classList.remove("drag-over");
+      });
+    });
+    listEl.addEventListener("dragover", function (e) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      var item = e.target.closest && e.target.closest(".item");
+      listEl.querySelectorAll(".item").forEach(function (el) {
+        el.classList.toggle("drag-over", el === item);
+      });
+    });
+    listEl.addEventListener("drop", function (e) {
+      e.preventDefault();
+      var item = e.target.closest && e.target.closest(".item");
+      if (!item || dragIdx < 0) return;
+      var to = parseInt(item.getAttribute("data-idx"), 10);
+      if (!isNaN(to) && to !== dragIdx) queueOp("move", dragIdx, to);
+    });
+  })();
+
+  window.previewLyric = function (source, id) {
+    openLyricModal();
+    lyricLines = []; lyricSong = null;
+    $("lyric-body").innerHTML = '<div class="tip">加载中…</div>';
+    fetch("/api/lyric?source=" + encodeURIComponent(source) + "&id=" + encodeURIComponent(id))
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d.ok && d.lines && d.lines.length) {
+          lyricLines = d.lines; lyricSong = d.song;
+          renderLyric(-1);
+          if (lyricTimer) clearInterval(lyricTimer);
+          lyricTimer = setInterval(function () {
+            var prog = lastState && lastState.current ? (lastState.current.progress || 0) : 0;
+            renderLyric(lyricIndexAt(prog));
+          }, 1000);
+        } else if (d.ok && d.lrc === "") {
+          $("lyric-body").innerHTML = '<div class="tip">这首是纯音乐，没有歌词</div>';
+        } else {
+          $("lyric-body").innerHTML = '<div class="tip">' + esc(d.msg || "没有找到歌词") + "</div>";
+        }
+      })
+      .catch(function () { $("lyric-body").innerHTML = '<div class="tip">歌词加载失败</div>'; });
+  };
+  function lyricIndexAt(progress) {
+    var idx = -1;
+    for (var i = 0; i < lyricLines.length; i++) {
+      if (lyricLines[i].t <= progress + 0.15) idx = i; else break;
+    }
+    return idx;
+  }
+  function renderLyric(idx) {
+    var html = "";
+    var start = Math.max(0, idx - 2), end = Math.min(lyricLines.length, idx + 4);
+    if (idx < 0) { start = 0; end = Math.min(lyricLines.length, 6); }
+    for (var i = start; i < end; i++) {
+      html += '<div class="lyric-line' + (i === idx ? " active" : "") + '">' + esc(lyricLines[i].text) + "</div>";
+    }
+    $("lyric-body").innerHTML = html;
+    var act = $("lyric-body").querySelector(".active");
+    if (act && lyricSong) $("lyric-title").textContent = lyricSong.title + " - 歌词预览";
+  }
+  function openLyricModal() { $("lyric-modal").classList.add("show"); }
+  window.closeLyricModal = function () {
+    $("lyric-modal").classList.remove("show");
+    if (lyricTimer) { clearInterval(lyricTimer); lyricTimer = null; }
+  };
+
+  /* ---------- 音源开关/排序 ---------- */
+  window.toggleSource = function (name, on) {
+    var active = (lastState && lastState.active_sources) ? lastState.active_sources.slice() : [];
+    var i = active.indexOf(name);
+    if (on && i < 0) active.push(name);
+    if (!on && i >= 0) active.splice(i, 1);
+    api("/api/settings", { patch: { sources: { active: active } } }).then(function (d) {
+      toast(d.msg || "已更新");
+    });
+  };
+  window.moveSource = function (name, dir) {
+    var active = (lastState && lastState.active_sources) ? lastState.active_sources.slice() : [];
+    var i = active.indexOf(name);
+    if (i < 0) return;
+    var j = i + dir;
+    if (j < 0 || j >= active.length) return;
+    var t = active[i]; active[i] = active[j]; active[j] = t;
+    api("/api/settings", { patch: { sources: { active: active } } }).then(function (d) { toast(d.msg || "已更新"); });
+  };
+
+  /* ---------- 扫码登录 ---------- */
+  var LOGIN_LABELS = { bilibili: "B站", qq: "QQ音乐", kugou: "酷狗", netease: "网易云" };
+  var LOGIN_STATUS_TEXT = {
+    waiting: "等待扫码…", scanned: "已扫码，请在手机上确认", confirmed: "已确认，正在获取 Cookie…",
+    expired: "二维码已过期，请点击「刷新二维码」", done: "登录成功！", error: "登录失败",
+    pending: "二维码生成中…",
+  };
+  window.startLogin = function (source) {
+    if (!source) { toast("请先选择要登录的平台"); return; }
+    window.currentLoginSource = source;
+    $("login-title").textContent = LOGIN_LABELS[source] + " 扫码登录";
+    $("login-qr").style.display = "none";
+    $("login-status").textContent = "正在获取二维码…";
+    $("login-status").className = "qr-status";
+    $("login-modal").classList.add("show");
+    if (loginTimer) { clearInterval(loginTimer); loginTimer = null; }
+    api("/api/login/start", { source: source }).then(function (d) {
+      if (d.ok && d.session && d.session.qr) {
+        $("login-qr").src = d.session.qr;
+        $("login-qr").style.display = "block";
+        $("login-status").textContent = "请使用 " + LOGIN_LABELS[source] + " APP 扫码";
+        pollLogin();
+      } else {
+        $("login-status").textContent = d.msg || "二维码获取失败";
+      }
+    }).catch(function () { $("login-status").textContent = "网络错误"; });
+  };
+  function pollLogin() {
+    if (loginTimer) clearInterval(loginTimer);
+    loginTimer = setInterval(function () {
+      api("/api/login/status", { source: window.currentLoginSource }).then(function (d) {
+        if (!d.ok) { return; }
+        var s = d.session || {};
+        var st = s.status || "waiting";
+        // 优先显示后端返回的真实原因，便于排查 QQ/网易云登录失败
+        var txt = LOGIN_STATUS_TEXT[st] || st;
+        if (s.detail && st !== "done") txt = s.detail;
+        $("login-status").textContent = txt;
+        $("login-status").className = "qr-status " + st;
+        if (st === "done") {
+          clearInterval(loginTimer); loginTimer = null;
+          setTimeout(closeLoginModal, 1200);
+          toast("登录成功，音源已热更新");
+        } else if (st === "expired") {
+          clearInterval(loginTimer); loginTimer = null;
+        } else if (st === "error") {
+          clearInterval(loginTimer); loginTimer = null;
+        }
+      }).catch(function () {});
+    }, 2000);
+  }
+  window.closeLoginModal = function () {
+    $("login-modal").classList.remove("show");
+    if (loginTimer) { clearInterval(loginTimer); loginTimer = null; }
+    if (window.currentLoginSource) api("/api/login/cancel", { source: window.currentLoginSource }).catch(function () {});
+  };
+  window.doLogout = function (source) {
+    api("/api/login/logout", { source: source }).then(function (d) { toast(d.msg || "已退出"); });
+  };
+  // 扫码被风控挡住时的保底：粘贴浏览器里的 Cookie
+  window.doManualCookie = function (name) {
+    var labels = { bilibili: "B站", qq: "QQ音乐", kugou: "酷狗", netease: "网易云" };
+    var tip = labels[name] + "：用浏览器登录网页版后，按 F12 → 应用/Application → Cookie，复制整行 Cookie 粘贴到这里。";
+    var ck = prompt(tip, "");
+    if (!ck) return;
+    api("/api/login/manual", { source: name, cookie: ck }).then(function (d) {
+      toast(d.msg || "已保存");
+    });
+  };
+  // 登录态保留开关
+  window.doKeepLogin = function (v) {
+    api("/api/settings", { login: { keep_cookies: !!v } }).then(function () {
+      toast(v ? "重启后将保留登录状态" : "重启后将清空登录状态");
+    });
+  };
+  // 初始化开关勾选状态
+  api("/api/settings").then(function (d) {
+    if (d.ok) $("keep-login").checked = (d.config.login || {}).keep_cookies !== false;
+  }).catch(function () {});
+
+  /* ---------- 设置 ---------- */
+  window.doReconnect = function () {
+    var mode = $("set-mode").value;
+    var room = parseInt($("set-room").value) || 0;
+    api("/api/danmaku/reconnect", { mode: mode, room_id: room }).then(function (d) {
+      toast(d.msg || "已切换");
+      refreshDanmuStatus();
+    });
+  };
+  window.saveRules = function () {
+    var patch = {
+      jukebox: {
+        request_prefixes: $("set-prefixes").value.split(/[,，]/).map(function (s) { return s.trim(); }).filter(Boolean),
+        blacklist: $("set-blacklist").value.split(/[,，]/).map(function (s) { return s.trim(); }).filter(Boolean),
+        user_cooldown_seconds: parseInt($("set-user-cd").value) || 0,
+        song_cooldown_minutes: parseInt($("set-song-cd").value) || 0,
+        max_queue_length: parseInt($("set-max-queue").value) || 0,
+        max_per_user_queue: parseInt($("set-max-per-user").value) || 0,
+        max_song_duration: (parseInt($("set-max-dur").value) || 15) * 60,
+        allow_user_skip: $("set-allow-skip").checked,
+      },
+    };
+    api("/api/settings", { patch: patch }).then(function (d) { toast(d.msg || "已保存"); });
+  };
+  window.saveKeepState = function () {
+    api("/api/settings", { patch: { jukebox: { keep_state_on_exit: $("set-keep-state").checked } } })
+      .then(function (d) { toast(d.msg || "已保存（重启后体现）"); });
+  };
+  window.resetSettings = function () {
+    if (!confirm("确定恢复默认设置？将清空管理页的所有覆盖（含登录 Cookie）。")) return;
+    api("/api/settings/reset", {}).then(function (d) { toast(d.msg || "已恢复默认"); });
+  };
+
+  /* ---------- 直播排队 ---------- */
+  var lqSliders = { font: null, frame: null, name: null };
+  function lqRender(st) {
+    if (!st) return;
+    var q = st.queue || [], pd = st.pending_priority || [];
+    $("lq-count").textContent = q.length;
+    $("lq-served").textContent = st.served_count || 0;
+    $("lq-pending-count").textContent = pd.length;
+    $("lq-queue-count").textContent = q.length ? "共 " + q.length + " 人" : "";
+    $("lq-room").textContent = "直播间 " + (st.room_id || "--") + (st.mode === "mock" ? "（模拟弹幕）" : "");
+    var box = $("lq-list");
+    if (!q.length) { box.innerHTML = '<div class="tip">暂无排队用户（观众在直播间发弹幕「排队」即可入队）</div>'; }
+    else {
+      box.innerHTML = q.map(function (it) {
+        var src = it.source === "manual" ? "手动加入" : it.source === "test" ? "本地测试" : "弹幕加入";
+        return '<div class="item">'
+          + '<div class="cover" style="display:flex;align-items:center;justify-content:center;font-weight:800;color:' + (it.priority ? "var(--yellow)" : "var(--pink)") + '">' + it.position + '</div>'
+          + '<div class="meta"><div class="t">' + (it.priority ? '<span class="pin-flag">&#11088;</span> ' : '') + esc(it.name)
+          + (it.content ? ' <span class="badge">' + esc(it.content) + '</span>' : '') + '</div>'
+          + '<div class="s">' + src + (it.content ? " · 要打：" + esc(it.content) : "") + '</div></div>'
+          + '<div class="ops"><button class="btn ghost sm" onclick="lqDel(' + it.position + ')">删除</button></div>'
+          + '</div>';
+      }).join("");
+    }
+    var pbox = $("lq-pending-list");
+    if (!pd.length) { pbox.innerHTML = '<div class="tip">暂无记录（送过优先礼物但还没发「排队」的用户）</div>'; }
+    else {
+      pbox.innerHTML = pd.map(function (p) {
+        return '<div class="item"><div class="meta"><div class="t">' + esc(p.name) + '</div>'
+          + '<div class="s">待用 ' + (p.credits || 1) + ' 次 · 发「排队」时消耗 1 次并插队</div></div>'
+          + '<div class="ops"><span class="badge warn">x' + (p.credits || 1) + '</span></div></div>';
+      }).join("");
+    }
+    // 滑块：拖动中不回写，松手后由 WS 状态接管
+    if (lqSliders.font && !lqSliders.font._drag) { lqSliders.font.value = st.font_size; $("lq-font-out").textContent = st.font_size + "px"; }
+    if (lqSliders.frame && !lqSliders.frame._drag) { lqSliders.frame.value = st.frame_opacity; $("lq-frame-out").textContent = st.frame_opacity + "%"; }
+    if (lqSliders.name && !lqSliders.name._drag) { lqSliders.name.value = st.name_opacity; $("lq-name-out").textContent = st.name_opacity + "%"; }
+    $("lq-priority").checked = st.priority_enabled === false;
+    $("lq-autoclear").checked = !!st.clear_on_start;
+    var kw = $("lq-keywords"), ct = $("lq-contents"), gf = $("lq-gifts");
+    if (document.activeElement !== kw) kw.value = (st.keywords || []).join(",");
+    if (document.activeElement !== ct) ct.value = (st.contents || []).join(",");
+    if (document.activeElement !== gf) gf.value = (st.priority_gifts || []).join(",");
+    $("lq-obs-url").textContent = location.origin + "/queue";
+  }
+  function fetchLiveQueue() {
+    fetch("/api/live-queue/state").then(function (r) { return r.json(); })
+      .then(lqRender).catch(function () {});
+  }
+  function lqShowResult(d) {
+    var box = $("lq-result");
+    box.textContent = (d && d.message) || (d && d.ok ? "OK" : "失败");
+    box.className = "result " + ((d && d.ok) ? "ok" : "err");
+  }
+  window.lqCmd = function (cmd, quiet) {
+    api("/api/live-queue/command", { command: cmd }).then(function (d) {
+      if (!quiet || !d.ok) lqShowResult(d);
+      if (d && d.ok && !d.changed) fetchLiveQueue(); // list/match 等查询类立即回填
+    }).catch(function () { lqShowResult({ ok: false, message: "请求失败" }); });
+  };
+  window.lqDel = function (pos) { lqCmd("del-" + pos); };
+  window.lqClear = function () {
+    if (!confirm("确定清空排队队列？（待用灯牌记录会保留）")) return;
+    lqCmd("clear");
+  };
+  window.lqRefresh = function () { fetchLiveQueue(); };
+  window.lqMatch = function () {
+    var v = $("lq-match").value.trim();
+    if (!v) { toast("请输入要测试的弹幕内容"); return; }
+    lqCmd("match-" + v);
+  };
+  window.lqCmdInput = function () {
+    var v = $("lq-cmd").value.trim();
+    if (!v) return;
+    lqCmd(v);
+    $("lq-cmd").value = "";
+  };
+  window.lqTestQueue = function () {
+    var name = $("lq-test-name").value.trim() || "测试观众";
+    lqCmd("test-queue-" + name);
+  };
+  window.lqTestGift = function () {
+    var name = $("lq-test-name").value.trim() || "测试观众";
+    lqCmd("test-gift-" + name);
+  };
+  window.lqTogglePriority = function () { lqCmd($("lq-priority").checked ? "priority-off" : "priority-on"); };
+  window.lqToggleAutoclear = function () { lqCmd($("lq-autoclear").checked ? "autoclear-on" : "autoclear-off"); };
+  window.lqSaveRules = function () {
+    function split(v) {
+      return v.split(/[,，]/).map(function (s) { return s.trim(); }).filter(function (s) { return !!s; });
+    }
+    var kw = split($("lq-keywords").value);
+    if (!kw.length) { toast("至少保留一个入队口令"); return; }
+    var patch = { keywords: kw, contents: split($("lq-contents").value), gift_names: split($("lq-gifts").value) };
+    if (!patch.gift_names.length) { toast("至少保留一个优先礼物名"); return; }
+    api("/api/settings", { patch: { live_queue: patch } }).then(function (d) {
+      toast(d.msg || "已保存");
+      fetchLiveQueue();
+    });
+  };
+  function lqBindSlider(id, outId, suffix, prefix) {
+    var el = $(id), lab = $(outId);
+    el._drag = false;
+    el.addEventListener("pointerdown", function () { el._drag = true; });
+    el.addEventListener("input", function () {
+      lab.textContent = el.value + suffix;
+      clearTimeout(el._h);
+      el._h = setTimeout(function () { lqCmd(prefix + el.value, true); }, 160);
+    });
+    el.addEventListener("change", function () { el._drag = false; });
+    return el;
+  }
+  lqSliders.font = lqBindSlider("lq-font", "lq-font-out", "px", "font-");
+  lqSliders.frame = lqBindSlider("lq-frame", "lq-frame-out", "%", "frame-");
+  lqSliders.name = lqBindSlider("lq-name", "lq-name-out", "%", "name-");
+
+  /* ---------- 初始化 ---------- */
+  // 搜索音源下拉
+  fetch("/api/state").then(function (r) { return r.json(); }).then(function (st) {
+    lastState = st;
+    var sel = $("search-src");
+    (st.sources || []).forEach(function (s) {
+      var opt = document.createElement("option");
+      opt.value = s.name; opt.textContent = (s.label || s.name) + (st.active_sources.indexOf(s.name) >= 0 ? "" : "（未启用）");
+      sel.appendChild(opt);
+    });
+    // 直播间表单回填
+    api("/api/settings", {}).catch(function () {});
+  }).catch(function () {});
+
+  // 用 GET 拉一次设置回填直播间/端口/提示（GET 端点）
+  fetch("/api/settings").then(function (r) { return r.json(); }).then(function (d) {
+    if (d.ok) {
+      $("foot-port").textContent = d.port;
+      var dm = (d.config && d.config.danmaku) || {};
+      $("set-mode").value = dm.mode || "mock";
+      $("set-room").value = dm.room_id || "";
+      $("settings-note").textContent = d.note || "";
+    }
+  }).catch(function () {});
+
+  connectWs();
+  refreshDanmuStatus();
+  setInterval(refreshDanmuStatus, 5000);
+  fetchLiveQueue();
+})();
+</script>
+</body>
+</html>
