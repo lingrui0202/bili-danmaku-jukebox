@@ -1,4 +1,4 @@
-"""统一日志：控制台 + 滚动文件（cache/logs/jukebox.log）。
+"""统一日志：控制台 + 按天滚动的文件（cache/logs/jukebox.log）。
 
 为什么要有这个模块（v1.1）：
     旧版只有控制台窗口，日志随进程消失；用户报「连不上直播间」时，
@@ -7,7 +7,7 @@
 
 约定：
 - 目录：<可写数据目录>/cache/logs/（打包后＝exe 同目录，只读时回退 %LOCALAPPDATA%）
-- 文件：jukebox.log，单文件 2MB 滚动，保留 5 份（jukebox.log.1 … .5）
+- 文件：jukebox.log（当天），跨天自动切到 jukebox.log.YYYY-MM-DD，保留 14 天
 - 格式：2026-10-24 18:20:01 [INFO] jukebox.danmaku: 已连接直播间 123
 - 脱敏：SESSDATA / bili_jct / Cookie 串 / 二维码 key 等一律打码，日志可以随便发人
 """
@@ -25,8 +25,7 @@ from typing import Optional
 LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
 
-MAX_BYTES = 2 * 1024 * 1024
-BACKUP_COUNT = 5
+BACKUP_DAYS = 14
 
 _state = {"dir": "", "file": "", "level": logging.INFO}
 
@@ -114,11 +113,14 @@ def setup(level: int = logging.INFO, to_console: bool = True) -> str:
     fmt = logging.Formatter(LOG_FORMAT, LOG_DATEFMT)
     redact = _RedactFilter()
 
-    # --- 文件（主产物） ---
+    # --- 文件（主产物，按天切分） ---
     try:
-        fh = logging.handlers.RotatingFileHandler(
-            path, maxBytes=MAX_BYTES, backupCount=BACKUP_COUNT, encoding="utf-8"
+        fh = logging.handlers.TimedRotatingFileHandler(
+            path, when="midnight", interval=1, backupCount=BACKUP_DAYS,
+            encoding="utf-8", utc=False,
         )
+        # 切出来的旧文件叫 jukebox.log.2026-10-24（默认是 .1 .2 这种序号）
+        fh.suffix = "%Y-%m-%d"
         fh.setFormatter(fmt)
         fh.addFilter(redact)
         root.addHandler(fh)

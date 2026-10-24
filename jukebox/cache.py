@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import tempfile
 import threading
@@ -10,6 +11,8 @@ import time
 from typing import Any, Optional
 
 from .models import Song, song_from_dict, song_to_dict
+
+_log = logging.getLogger("jukebox.cache")
 
 
 class TTLCache:
@@ -115,12 +118,22 @@ class CacheManager:
             pass
 
     def load_state(self) -> Optional[dict]:
+        """读取播放状态；文件损坏时**备份后重建**，不再静默丢队列（v1.1.2）。"""
         if not os.path.exists(self.state_path):
             return None
         try:
             with open(self.state_path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
+                data = json.load(f)
+            if not isinstance(data, dict):
+                raise ValueError("state.json 不是对象")
+            return data
+        except Exception as e:
+            try:
+                backup = f"{self.state_path}.corrupt-{time.strftime('%Y%m%d-%H%M%S')}"
+                os.replace(self.state_path, backup)
+                _log.warning("state.json 损坏（%s），已备份为 %s，本次按空队列启动", e, backup)
+            except Exception:
+                _log.warning("state.json 损坏（%s），备份也失败了", e)
             return None
 
     def clear_state(self) -> None:

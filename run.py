@@ -328,6 +328,7 @@ def main() -> None:
     import uvicorn
 
     from jukebox.config import app_data_dir, load_config, CONFIG_PATH
+    from jukebox import server as server_module
     from jukebox.server import app
     from jukebox.settings import SettingsStore
 
@@ -355,6 +356,9 @@ def main() -> None:
     port = base_port
     while port < base_port + 20:
         if _port_free(port):
+            # 告诉服务层「真正用的端口」：端口顺延后控制台/OBS 地址才不会给错
+            server_module.RUNTIME["port"] = port
+            server_module.RUNTIME["host"] = host
             _banner(port, cfg["danmaku"]["mode"])
             log.info("服务地址：http://%s:%s/web/console.html", host, port)
             if cfg["server"].get("open_browser", True):

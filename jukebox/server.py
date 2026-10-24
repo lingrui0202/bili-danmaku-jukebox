@@ -31,6 +31,27 @@ log = logging.getLogger("jukebox.server")
 
 WEB_DIR = os.path.join(PROJECT_ROOT, "web")
 
+#: 运行时信息（run.py 绑定端口后写入实际端口；端口顺延时也能给出正确地址）
+RUNTIME: dict = {"port": 0, "host": "127.0.0.1"}
+
+
+def _base_url() -> str:
+    port = int(RUNTIME.get("port") or state.cfg.get("server", {}).get("port") or 8788)
+    host = str(RUNTIME.get("host") or state.cfg.get("server", {}).get("host") or "127.0.0.1")
+    if host in ("0.0.0.0", "::"):
+        host = "127.0.0.1"
+    return f"http://{host}:{port}"
+
+
+def _urls() -> dict:
+    base = _base_url()
+    return {
+        "console": f"{base}/web/console.html",
+        "obs": f"{base}/obs",
+        "stage": f"{base}/stage",
+        "queue": f"{base}/queue",
+    }
+
 
 LOGIN_LABELS = {"bilibili": "B站", "qq": "QQ音乐", "kugou": "酷狗", "netease": "网易云"}
 
@@ -701,6 +722,146 @@ async def api_logs_open_folder():
         return {"ok": False, "msg": f"打开失败：{e}（路径：{directory}）"}
 
 
+# ---------------- 启动体检（v1.1.2） ----------------
+
+@app.get("/api/health")
+async def api_health():
+    """四项体检：弹幕连接 / B站登录 / 音源 / OBS 地址。"""
+    lst = state.listener
+    dm = lst.status_dict() if lst else {"mode": "mock", "connected": False, "room_id": 0}
+    mode = dm.get("mode", "mock")
+    room = dm.get("room_id") or 0
+
+    if mode == "mock":
+        dm_item = ("warn", "模拟弹幕模式：不连直播间，观众弹幕不会进来")
+    elif dm.get("connected"):
+        live = dm.get("live_status")
+        if live == 0:
+            dm_item = ("ok", f"已连接直播间 {room}（当前未开播，开播后才有真实弹幕）")
+        else:
+            dm_item = ("ok", f"已连接直播间 {room}，累计收到 {dm.get('total_received', 0)} 条")
+    elif dm.get("error"):
+        dm_item = ("error", f"直播间 {room} 连不上：{dm.get('error')}")
+    else:
+        dm_item = ("warn", f"直播间 {room} 正在连接…")
+
+    logged = bool(state.cfg.get("sources", {}).get("bilibili", {}).get("cookie"))
+    if not logged:
+        login_item = ("warn", "B站未登录：观众昵称会显示成星号，灯牌插队可能也认不出人")
+    else:
+        login_item = ("ok", "B站已登录（完整昵称 + 灯牌插队可用）")
+
+    active = [n for n in state.core.active_sources if n in state.sources]
+    if active:
+        src_item = ("ok", f"已启用音源：{'、'.join(active)}")
+    else:
+        src_item = ("error", "一个音源都没启用，搜歌一定失败")
+
+    port = int(RUNTIME.get("port") or 0) or int(state.cfg.get("server", {}).get("port") or 8788)
+    cfg_port = int(state.cfg.get("server", {}).get("port") or 8788)
+    if port != cfg_port:
+        obs_item = ("warn", f"端口已顺延到 {port}（配置里是 {cfg_port}）：OBS 源地址要改成新端口")
+    else:
+        obs_item = ("ok", f"OBS 地址可用（端口 {port}）")
+
+    items = [
+        {"key": "弹幕连接", "level": dm_item[0], "text": dm_item[1]},
+        {"key": "B站登录", "level": login_item[0], "text": login_item[1]},
+        {"key": "音源", "level": src_item[0], "text": src_item[1]},
+        {"key": "OBS 地址", "level": obs_item[0], "text": obs_item[1]},
+    ]
+    return {
+        "ok": True,
+        "version": __version__,
+        "port": port,
+        "configured_port": cfg_port,
+        "urls": _urls(),
+        "items": items,
+        "worst": "error" if any(i["level"] == "error" for i in items)
+        else ("warn" if any(i["level"] == "warn" for i in items) else "ok"),
+    }
+
+
+# ---------------- 诊断包（v1.1.2） ----------------
+
+@app.get("/api/diagnostics")
+async def api_diagnostics():
+    """打包一份可外发的诊断包：日志 + 脱敏配置 + 环境信息。
+
+    日志里 Cookie/token 已脱敏；覆盖层里的登录 Cookie 在这里也会被清空。
+    """
+    import platform
+    import shutil
+    import sys
+    import tempfile
+    import zipfile
+
+    from fastapi import BackgroundTasks
+
+    ts = time.strftime("%Y%m%d-%H%M%S")
+    name = f"bili-jukebox-diag-{ts}.zip"
+    tmpdir = tempfile.mkdtemp(prefix="jb-diag-")
+    path = os.path.join(tmpdir, name)
+
+    try:
+        with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+            for f in list_log_files():
+                full = os.path.join(log_dir(), f["name"])
+                try:
+                    z.write(full, arcname=f"logs/{f['name']}")
+                except Exception as e:
+                    log.info("诊断包跳过日志 %s：%s", f["name"], e)
+
+            info = {
+                "version": __version__,
+                "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "frozen": bool(getattr(sys, "frozen", False)),
+                "python": sys.version,
+                "platform": platform.platform(),
+                "executable": sys.executable,
+                "data_dir": app_data_dir(),
+                "port": _base_url(),
+                "urls": _urls(),
+                "danmaku": state.listener.status_dict() if state.listener else None,
+                "live_queue": {
+                    "people": len(state.live_queue.queue) if state.live_queue else 0,
+                    "pending_gifts": len(state.live_queue.pending) if state.live_queue else 0,
+                    "keywords": state.live_queue.keywords if state.live_queue else [],
+                },
+                "queue": {
+                    "current": (state.core.current.song.display() if state.core and state.core.current else None),
+                    "pending": len(state.core.queue) if state.core else 0,
+                },
+                "sources": {n: bool(getattr(s, "cookie", "")) for n, s in state.sources.items()},
+                "config_file": CONFIG_PATH,
+            }
+            z.writestr("info.json", json.dumps(info, ensure_ascii=False, indent=2, default=str))
+            z.writestr(
+                "config.public.json",
+                json.dumps(_public_config(state.cfg), ensure_ascii=False, indent=2, default=str),
+            )
+            z.writestr(
+                "settings.public.json",
+                json.dumps(_sanitize_overlay(state.settings.data), ensure_ascii=False, indent=2, default=str),
+            )
+            z.writestr("README.txt", "这是 B站弹幕点歌机的诊断包。\n"
+                                     "logs/ 是运行日志；info.json 是环境信息；\n"
+                                     "config/settings 里的登录 Cookie 已清空，可以安全外发。\n")
+        log.info("已生成诊断包：%s", path)
+    except Exception as e:
+        log.warning("生成诊断包失败：%s", e)
+        return JSONResponse({"ok": False, "msg": f"生成失败：{e}"}, status_code=500)
+
+    background = BackgroundTasks()
+    background.add_task(shutil.rmtree, tmpdir, True)
+    return FileResponse(
+        path,
+        media_type="application/zip",
+        filename=name,
+        background=background,
+    )
+
+
 
 # ---------------- 设置 API ----------------
 
@@ -712,7 +873,9 @@ async def api_get_settings():
         "config": _public_config(state.cfg),
         "overlay": _sanitize_overlay(state.settings.data),
         "config_file": CONFIG_PATH,
-        "port": int(state.cfg["server"]["port"]),
+        "port": int(RUNTIME.get("port") or state.cfg["server"]["port"]),
+        "urls": _urls(),
+        "has_backup": state.settings.has_backup(),
         "note": "管理页修改只写入 cache/settings.json，不影响 config.yaml；「恢复默认」清空覆盖层",
     }
 
@@ -742,6 +905,20 @@ async def api_reset_settings():
     log.info("设置已恢复默认（覆盖层已清空，登录态已清除）")
     await state.core.broadcast_state()
     return {"ok": True, "msg": "已恢复默认设置"}
+
+
+@app.post("/api/settings/rollback")
+async def api_settings_rollback():
+    """撤销上一次保存（settings.json.bak）。"""
+    if not state.settings.has_backup():
+        return {"ok": False, "msg": "没有可回滚的上一版设置（只在保存过一次之后才有）"}
+    ok = state.settings.rollback()
+    if not ok:
+        return {"ok": False, "msg": "回滚失败：备份文件读不出来"}
+    state.apply_settings()
+    log.info("设置已回滚到上一版（settings.json.bak）")
+    await state.core.broadcast_state()
+    return {"ok": True, "msg": "已恢复到上一次保存之前的设置"}
 
 
 # ---------------- 登录 API（logins.py 见阶段6） ----------------

@@ -40,15 +40,53 @@ class SettingsStore:
         return self.data
 
     def save(self) -> None:
-        """原子写：先写 .tmp 再 os.replace；写失败静默。"""
+        """原子写：先写 .tmp 再 os.replace；写失败静默。
+
+        v1.1.2：写之前把上一版留成 settings.json.bak，支持「撤销上次保存」。
+        """
         try:
             os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            if os.path.exists(self.path):
+                try:
+                    import shutil
+
+                    shutil.copyfile(self.path, self.path + ".bak")
+                except Exception:
+                    pass
             fd, tmp = tempfile.mkstemp(dir=os.path.dirname(self.path), suffix=".tmp")
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(self.data, f, ensure_ascii=False, indent=2)
             os.replace(tmp, self.path)
         except Exception:
             pass
+
+    # ---------- 回滚 ----------
+    def has_backup(self) -> bool:
+        return os.path.exists(self.path + ".bak")
+
+    def rollback(self) -> bool:
+        """把 settings.json 恢复成上一版（.bak）；没有备份返回 False。"""
+        backup = self.path + ".bak"
+        if not os.path.exists(backup):
+            return False
+        try:
+            with open(backup, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, dict):
+                return False
+            self.data = data
+            fd, tmp = tempfile.mkstemp(dir=os.path.dirname(self.path), suffix=".tmp")
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(self.data, f, ensure_ascii=False, indent=2)
+            os.replace(tmp, self.path)
+            # 用掉的备份删掉，避免连点两次撤回到「再上一版」
+            try:
+                os.remove(backup)
+            except Exception:
+                pass
+            return True
+        except Exception:
+            return False
 
     # ---------- 操作 ----------
     def patch(self, patch: dict) -> dict:

@@ -352,6 +352,8 @@ class BiliLiveWS:
         self._hb: Optional[asyncio.Task] = None
         self._closed = False
         self._frames = 0
+        #: 最后一次收到任何数据（含心跳回包）的时刻，给上层看门狗判断「假连接」
+        self.last_activity = time.monotonic()
 
     def _buvid_from_cookie(self) -> str:
         for part in (self.cookie or "").split(";"):
@@ -455,6 +457,7 @@ class BiliLiveWS:
                     raise DanmakuError(describe_error(e)) from e
                 if isinstance(msg, str):
                     continue
+                self.last_activity = time.monotonic()
                 for op, payload in _iter_packets(bytes(msg)):
                     if op == self.OP_AUTH_OK and not authed:
                         # 认证回包正文是 {"code":0}；非 0 说明 token/房间有问题
@@ -556,6 +559,8 @@ class DanmakuListener:
         self._task: Optional[asyncio.Task] = None
         self._session = None  # LiveDanmaku 实例
         self._closed = False
+        self._watchdog_task: Optional[asyncio.Task] = None
+        self._forced_reconnect = False
 
     async def _emit_status(self) -> None:
         if self.on_status:
@@ -611,6 +616,36 @@ class DanmakuListener:
         self._closed = False
         self._task = asyncio.create_task(self._run_loop())
         self._task.add_done_callback(self._on_task_done)
+        self._watchdog_task = asyncio.create_task(self._watchdog_loop())
+
+    #: 连接「看着是好的」但超过这个秒数没收到任何数据（心跳回包也算）→ 判定假连接
+    _IDLE_LIMIT = 90.0
+
+    async def _watchdog_loop(self) -> None:
+        """连接看门狗：B站偶发「TCP 还在、但不再推任何消息」的假连接。
+
+        旧版只能靠用户发现「怎么没弹幕了」；这里主动断开逼重连，
+        并以一条明确日志记录下来（日志页一眼可见）。
+        """
+        while not self._closed:
+            await asyncio.sleep(15)
+            try:
+                if self._closed or not self.connected or self._session is None:
+                    continue
+                last = getattr(self._session, "last_activity", 0.0)
+                idle = time.monotonic() - last
+                if idle > self._IDLE_LIMIT:
+                    log.warning(
+                        "直播间 %s 已 %.0fs 收不到任何数据（含心跳回包），判定为假连接，主动重连",
+                        self.room_id, idle,
+                    )
+                    self._forced_reconnect = True
+                    self.last_error = f"连接假死（{int(idle)} 秒无任何数据），已自动重连"
+                    await self._session.close()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                log.info("看门狗检查异常（忽略）：%s", describe_error(e))
 
     async def _run_loop(self) -> None:
         """连接 + 自动重连循环（网络抖动时无限重试）。
@@ -639,8 +674,13 @@ class DanmakuListener:
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                self.last_error = describe_error(e)
-                log.warning("弹幕连接失败（第 %s 次）：%s", attempt, self.last_error, exc_info=True)
+                if self._forced_reconnect:
+                    # 看门狗主动断开的，别把它报成「服务器拒绝/网络错误」
+                    log.info("按看门狗决定重连（原异常：%s）", describe_error(e))
+                else:
+                    self.last_error = describe_error(e)
+                    log.warning("弹幕连接失败（第 %s 次）：%s", attempt, self.last_error, exc_info=True)
+                self._forced_reconnect = False
             else:
                 # run() 正常返回 = 服务器断开（少见）
                 self.last_error = "连接被服务器关闭"
@@ -725,6 +765,13 @@ class DanmakuListener:
 
     async def stop(self) -> None:
         self._closed = True  # 先让重连循环退出，再取消任务，避免又自动连上
+        if self._watchdog_task:
+            self._watchdog_task.cancel()
+            try:
+                await self._watchdog_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._watchdog_task = None
         if self._task:
             self._task.cancel()
             try:

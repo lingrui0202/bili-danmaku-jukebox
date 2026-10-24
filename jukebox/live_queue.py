@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import time
@@ -21,6 +22,8 @@ import unicodedata
 from typing import Any, Callable, Optional
 
 from .danmaku import Danmu
+
+_log = logging.getLogger("jukebox.live_queue")
 
 # 分隔符：「排队，轨外」「排队 轨外」「排队：轨外」都能切出内容
 _SPLIT_RE = re.compile(r"([,;:/|\s\-+.，；：、。—])")
@@ -113,13 +116,25 @@ class LiveQueue:
     # ---------- 持久化 ----------
 
     def _load_state(self):
-        try:
-            import json
+        """读取排队状态；文件损坏时备份后重建，不再静默清空队列（v1.1.2）。"""
+        import json
 
+        if not os.path.exists(self.state_path):
+            return
+        try:
             with open(self.state_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             if not isinstance(data, dict):
-                return
+                raise ValueError("live_queue.json 不是对象")
+        except Exception as e:
+            backup = f"{self.state_path}.corrupt-{time.strftime('%Y%m%d-%H%M%S')}"
+            try:
+                os.replace(self.state_path, backup)
+                _log.warning("live_queue.json 损坏（%s），已备份为 %s", e, backup)
+            except Exception:
+                _log.warning("live_queue.json 损坏（%s），备份失败", e)
+            return
+        try:
             self.font_size = int(data.get("font_size") or self.font_size)
             self.frame_opacity = int(data.get("frame_opacity") or self.frame_opacity)
             self.name_opacity = int(data.get("name_opacity") or self.name_opacity)
@@ -137,8 +152,8 @@ class LiveQueue:
             for u in self.pending:
                 u.setdefault("credits", 1)
                 u.setdefault("updated_at", int(time.time()))
-        except Exception:
-            pass
+        except Exception as e:
+            _log.warning("live_queue.json 内容异常，部分字段已忽略：%s", e)
 
     def _save_state(self):
         import json

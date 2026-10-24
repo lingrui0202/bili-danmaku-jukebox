@@ -245,11 +245,17 @@
     <span class="tab-title" id="tab-title">正在播放</span>
     <div class="conn"><span class="dot" id="ws-dot"></span><span id="ws-text">连接中…</span>
       <span style="margin-left:14px" class="dot" id="dm-dot"></span><span id="dm-text">弹幕 --</span>
+      <span class="badge warn" id="port-warn" style="display:none;margin-left:10px"></span>
     </div>
   </div>
 
   <!-- 正在播放 -->
   <div class="content active" id="tab-play">
+    <div class="card" id="health-card">
+      <h3>&#129658; 启动体检 <span class="sub" id="health-sum">检查中…</span></h3>
+      <div id="health-list"></div>
+      <div class="tip" style="margin-top:8px">四项都绿了，直播间的弹幕才会正常进来。点对应标签页去改。</div>
+    </div>
     <div class="card">
       <h3>&#127925; 正在播放 <span class="sub" id="np-total"></span></h3>
       <div class="np" id="np-box">
@@ -359,10 +365,14 @@
         日志里的 Cookie、token 已自动打码。
       </div>
       <div class="tip" id="logs-path" style="margin-bottom:10px;word-break:break-all">日志文件：--</div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center">
         <button class="btn sm" onclick="loadLogs()">&#128260; 刷新</button>
         <a class="btn sm ghost" id="logs-download" href="/api/logs/download" download>&#11015;&#65039; 下载日志</a>
+        <a class="btn sm ghost" href="/api/diagnostics" download>&#128230; 导出诊断包</a>
         <button class="btn sm ghost" onclick="openLogFolder()">&#128193; 打开日志文件夹</button>
+        <label class="tip" style="display:flex;gap:6px;align-items:center;cursor:pointer">
+          <input type="checkbox" id="logs-auto" onchange="toggleLogAuto(this.checked)"> 每 5 秒自动刷新
+        </label>
         <select id="logs-file" onchange="loadLogs(this.value)" style="display:none"></select>
       </div>
       <pre id="logs-body" style="max-height:60vh;overflow:auto;background:rgba(0,0,0,.28);border-radius:10px;padding:12px;font-size:12px;line-height:1.55;white-space:pre-wrap;word-break:break-all">（加载中…）</pre>
@@ -437,9 +447,16 @@
       </div>
       <div class="row">
         <button class="btn" onclick="saveKeepState()">保存</button>
+        <button class="btn ghost" onclick="rollbackSettings()">&#8630; 撤销上次保存</button>
         <button class="btn danger" onclick="resetSettings()">恢复默认设置</button>
       </div>
       <div class="tip" style="margin-top:10px" id="settings-note"></div>
+    </div>
+
+    <div class="card">
+      <h3>&#128250; OBS 接入地址 <span class="sub" id="obs-port-note">端口一变，这里的地址也要跟着改</span></h3>
+      <div id="obs-urls"></div>
+      <div class="tip" style="margin-top:8px">点地址即复制，粘到 OBS 的「浏览器源」里。端口被占用时会自动顺延，以这里显示的为准。</div>
     </div>
   </div>
 
@@ -644,6 +661,85 @@
   window.loadLogs = loadLogs;
   window.openLogFolder = function () {
     api("/api/logs/open-folder", {}).then(function (d) { toast(d.msg || (d.ok ? "已打开日志文件夹" : "打开失败")); });
+  };
+  var logsTimer = null;
+  window.toggleLogAuto = function (on) {
+    if (logsTimer) { clearInterval(logsTimer); logsTimer = null; }
+    if (on) logsTimer = setInterval(function () { loadLogs(); }, 5000);
+  };
+
+  /* ---------- 启动体检（v1.1.2） ---------- */
+  function levelDot(level) {
+    if (level === "ok") return '<span class="dot on" style="display:inline-block;margin-right:6px"></span>';
+    if (level === "error") return '<span class="dot err" style="display:inline-block;margin-right:6px"></span>';
+    return '<span class="dot mock" style="display:inline-block;margin-right:6px"></span>';
+  }
+  function renderHealth(d) {
+    var list = $("health-list");
+    if (!list || !d || !d.items) return;
+    list.innerHTML = d.items.map(function (it) {
+      return '<div style="display:flex;gap:8px;align-items:flex-start;padding:4px 0;font-size:13px">' +
+        levelDot(it.level) +
+        '<b style="min-width:76px;color:var(--text)">' + esc(it.key) + "</b>" +
+        '<span class="tip" style="flex:1">' + esc(it.text) + "</span></div>";
+    }).join("");
+    var sum = $("health-sum");
+    if (sum) {
+      sum.textContent = d.worst === "ok" ? "四项全部正常" :
+        (d.worst === "error" ? "有问题，先处理红点" : "有提醒，建议看一下");
+    }
+  }
+  function loadHealth() {
+    fetch("/api/health").then(function (r) { return r.json(); }).then(renderHealth).catch(function () {});
+  }
+  window.loadHealth = loadHealth;
+
+  /* ---------- OBS 地址 ---------- */
+  function renderUrls(d) {
+    var box = $("obs-urls");
+    if (!box) return;
+    var urls = (d && d.urls) || null;
+    if (!urls) return;
+    var rows = [["管理控制台", urls.console], ["OBS 播放页", urls.obs],
+                ["OBS 歌词页", urls.stage], ["OBS 排队页", urls.queue]];
+    box.innerHTML = rows.map(function (r) {
+      return '<div style="display:flex;gap:10px;align-items:center;padding:5px 0;font-size:13px">' +
+        '<b style="min-width:92px">' + esc(r[0]) + "</b>" +
+        '<code class="addr" data-url="' + esc(r[1]) + '" style="flex:1;cursor:pointer;word-break:break-all;color:var(--pink)" title="点击复制">' +
+        esc(r[1]) + "</code></div>";
+    }).join("");
+    var note = $("obs-port-note");
+    var warn = $("port-warn");
+    if (note && d.port) {
+      var cur = parseInt(location.port || "80", 10);
+      if (cur && d.port !== cur) {
+        note.textContent = "⚠ 实际端口 " + d.port + "，浏览器地址栏是 " + cur + "，OBS 请用下面的地址";
+        if (warn) { warn.style.display = ""; warn.textContent = "端口已顺延为 " + d.port + "（OBS 地址要改）"; }
+      } else {
+        note.textContent = "端口 " + d.port + "（与当前地址一致）";
+        if (warn) warn.style.display = "none";
+      }
+    }
+    Array.prototype.forEach.call(box.querySelectorAll(".addr"), function (el) {
+      el.addEventListener("click", function () { copyText(el.getAttribute("data-url")); });
+    });
+  }
+  function copyText(t) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(t).then(function () { toast("已复制：" + t); },
+        function () { window.prompt("手动复制：", t); });
+    } else {
+      window.prompt("手动复制：", t);
+    }
+  }
+
+  /* ---------- 设置回滚 ---------- */
+  window.rollbackSettings = function () {
+    if (!confirm("回到上一次保存之前的设置？（登录态不会被清）")) return;
+    api("/api/settings/rollback", {}).then(function (d) {
+      toast(d.msg || (d.ok ? "已回滚" : "无法回滚"));
+      if (d.ok) location.reload();
+    });
   };
 
   /* ---------- WebSocket ---------- */
@@ -1304,6 +1400,7 @@
       $("set-mode").value = dm.mode || "mock";
       $("set-room").value = dm.room_id || "";
       $("settings-note").textContent = d.note || "";
+      renderUrls(d);
     }
   }).catch(function () {});
 
@@ -1311,6 +1408,8 @@
   refreshDanmuStatus();
   setInterval(refreshDanmuStatus, 5000);
   fetchLiveQueue();
+  loadHealth();
+  setInterval(loadHealth, 15000);
 })();
 </script>
 </body>

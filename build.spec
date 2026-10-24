@@ -71,6 +71,8 @@ exe = EXE(
     a.datas,
     [],
     name="bili-jukebox",
+    icon="docs/icon.ico",           # 图标（v1.1.2 起）
+    version="version_info.txt",     # 文件属性里显示版本号（v1.1.2 起）
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
