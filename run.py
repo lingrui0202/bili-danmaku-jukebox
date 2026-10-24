@@ -149,40 +149,97 @@ def _banner(port: int, mode: str) -> None:
 
 
 def _is_elevated() -> bool:
-    """当前进程是否以管理员（提升权限）身份运行。"""
+    """当前进程的令牌**是否真的被提升**（UAC 已同意），而不是「用户属于管理员组」。
+
+    坑（2026-10-24 实测）：`shell32.IsUserAnAdmin()` 在管理员账号下，
+    即使进程是普通（已过滤）令牌也返回 **True**——它回答的是「你是不是管理员组的人」，
+    不是「这个进程有没有提升」。拿它判断会永远走「管理员分支」，
+    结果就是浏览器永远不弹（用户报的「不会自动拉起浏览器」）。
+    正确做法：读令牌的 TokenElevation。
+    """
     if sys.platform != "win32":
         return False
     try:
         import ctypes
+        from ctypes import wintypes
 
-        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+
+        kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+        advapi32.OpenProcessToken.argtypes = [
+            wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)
+        ]
+        advapi32.OpenProcessToken.restype = wintypes.BOOL
+        advapi32.GetTokenInformation.argtypes = [
+            wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p,
+            wintypes.DWORD, ctypes.POINTER(wintypes.DWORD),
+        ]
+        advapi32.GetTokenInformation.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+
+        class TOKEN_ELEVATION(ctypes.Structure):
+            _fields_ = [("TokenIsElevated", wintypes.DWORD)]
+
+        TOKEN_QUERY = 0x0008
+        TOKEN_ELEVATION_CLASS = 20
+
+        handle = wintypes.HANDLE()
+        if not advapi32.OpenProcessToken(
+            kernel32.GetCurrentProcess(), TOKEN_QUERY, ctypes.byref(handle)
+        ):
+            return False
+        try:
+            info = TOKEN_ELEVATION()
+            size = wintypes.DWORD()
+            ok = advapi32.GetTokenInformation(
+                handle, TOKEN_ELEVATION_CLASS, ctypes.byref(info),
+                ctypes.sizeof(info), ctypes.byref(size),
+            )
+            return bool(ok and info.TokenIsElevated)
+        finally:
+            kernel32.CloseHandle(handle)
     except Exception:
         return False
 
 
-def _open_console(port: int) -> None:
-    """服务起来后自动打开管理页（后台等待端口就绪再开，避免抢跑白屏）。
+def _launch_url(url: str, elevated: bool) -> str:
+    """用最合适的方式打开管理页，返回实际用的方式（写日志用）。
 
-    v1.1：以管理员身份运行时**不自动开浏览器**。
-    管理员进程去拉起 Edge/Chrome 会撞上「现有实例正在以提升的权限运行，
-    是否用普通权限重启」的弹窗（用户还得点一次，甚至以为程序卡住）。
-    这时只打印地址，让用户自己在普通浏览器里打开即可。
+    提升权限的进程直接 `webbrowser.open()` 会拉起一个「提升的浏览器实例」，
+    Edge/Chrome 会弹「现有实例正在以提升的权限运行，是否重启」——所以提升时
+    把 URL 交给 **非提升的 explorer.exe** 去开（资源管理器是普通权限，
+    由它调起默认浏览器就不会冲突）。
+    """
+    import subprocess
+    import webbrowser
+
+    if elevated:
+        try:
+            subprocess.Popen(["explorer.exe", url], close_fds=True)
+            return "explorer"
+        except Exception as e:
+            log.info("交给 explorer 打开失败（%s），改用 webbrowser", e)
+    try:
+        webbrowser.open(url, new=1, autoraise=True)
+        return "webbrowser"
+    except Exception as e:
+        log.info("自动打开浏览器失败（%s）", e)
+        return ""
+
+
+def _open_console(port: int) -> None:
+    """服务起来后自动打开管理页（后台等端口就绪再开，避免抢跑白屏）。
+
+    v1.1.1：修掉两件事——
+    1. 提升判定用错 API（IsUserAnAdmin），导致浏览器从不自动开；
+    2. 提升时不再「跳过」，而是交给 explorer.exe 打开（不会弹权限冲突框）。
     """
     import threading
     import urllib.request
-    import webbrowser
 
     url = f"http://127.0.0.1:{port}/web/console.html"
-
-    if _is_elevated():
-        msg = (
-            f"[提示] 当前以管理员权限运行，已跳过自动打开浏览器"
-            f"（否则 Edge/Chrome 会弹「提升权限实例」的冲突框）。\n"
-            f"       请手动在浏览器打开：{url}"
-        )
-        print(msg)
-        log.info("以管理员权限运行：跳过自动打开浏览器，请手动访问 %s", url)
-        return
+    elevated = _is_elevated()
 
     def _run():
         for _ in range(30):
@@ -192,10 +249,12 @@ def _open_console(port: int) -> None:
                         break
             except Exception:
                 time.sleep(0.5)
-        try:
-            webbrowser.open(url, new=1, autoraise=True)
-        except Exception as e:
-            log.info("自动打开浏览器失败（%s），请手动访问 %s", e, url)
+        how = _launch_url(url, elevated)
+        if how:
+            log.info("已自动打开管理页（%s，提升=%s）：%s", how, elevated, url)
+        else:
+            print(f"[提示] 没能自动打开浏览器，请手动访问：{url}")
+            log.info("自动打开浏览器失败，请手动访问 %s", url)
 
     threading.Thread(target=_run, daemon=True).start()
 
@@ -247,14 +306,14 @@ def _acquire_single_instance() -> bool:
 def _open_running_instance(base_port: int) -> bool:
     """已有实例在运行：探测其端口并打开管理页。"""
     import urllib.request
-    import webbrowser
 
     for p in range(base_port, base_port + 20):
         try:
             with urllib.request.urlopen(f"http://127.0.0.1:{p}/api/state", timeout=0.6) as r:
                 if r.status == 200:
                     url = f"http://127.0.0.1:{p}/web/console.html"
-                    webbrowser.open(url, new=1)
+                    how = _launch_url(url, _is_elevated())
+                    log.info("已有实例在运行（端口 %s），打开管理页：%s（%s）", p, url, how or "失败")
                     print(f"[info] 程序已在运行，已为你打开管理页：{url}")
                     return True
         except Exception:
