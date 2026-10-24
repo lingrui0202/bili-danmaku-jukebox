@@ -505,6 +505,32 @@ def _queue_index(body: dict) -> Optional[int]:
     return None
 
 
+def _cookie_ok(name: str, raw: str) -> bool:
+    """这个 Cookie 能不能真的当登录态用。
+
+    v1.1.5：B站 必须校验 **SESSDATA 非空**。之前只看「cookie 字符串非空」，
+    而 bilibili_api 的扫码登录会返回一个**所有字段都是空串**的 Credential，
+    序列化后是一串非空 JSON → 界面显示“已登录”，弹幕连接却是匿名
+    （用户反馈：明明登录了还是星号）。
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return False
+    if name != "bilibili":
+        return True
+    try:
+        from .danmaku import _cookie_from_credential
+
+        converted = _cookie_from_credential(raw)
+        for part in converted.split(";"):
+            k, _, v = part.partition("=")
+            if k.strip().lower() == "sessdata" and v.strip():
+                return True
+        return False
+    except Exception:
+        return False
+
+
 def _sanitize_overlay(overlay: dict) -> dict:
     """设置覆盖层脱敏：登录 Cookie 不回传明文，只标记是否已登录。"""
     o = copy.deepcopy(overlay or {})
@@ -525,7 +551,7 @@ def _public_config(cfg: dict) -> dict:
     logged = {}
     for name in ("bilibili", "qq", "kugou", "netease"):
         sub = srcs.get(name) or {}
-        logged[name] = bool(sub.get("cookie"))
+        logged[name] = _cookie_ok(name, sub.get("cookie", ""))
         if name in srcs:
             srcs[name]["cookie"] = ""
     c["sources_logged_in"] = logged
@@ -765,8 +791,10 @@ async def api_health():
             login_uid = 0
     if not bili_cookie:
         login_item = ("warn", "B站未登录：观众昵称会显示成星号，灯牌插队可能也认不出人")
+    elif not _cookie_ok("bilibili", bili_cookie):
+        login_item = ("warn", "保存的 B站 登录态无效（没有 SESSDATA）：实际会按匿名连接，请重新扫码登录")
     elif not login_uid:
-        login_item = ("warn", "有 B站 Cookie 但缺少 DedeUserID：实际会按匿名连接，昵称还是星号——请重新扫码登录")
+        login_item = ("warn", "有 B站 SESSDATA 但缺 DedeUserID：可能仍被当匿名，建议重新扫码登录")
     else:
         login_item = ("ok", f"B站已登录（uid {login_uid}）：完整昵称 + 灯牌插队可用")
 
@@ -1069,7 +1097,7 @@ async def api_login_state():
         entry = {
             "label": label,
             "supports_login": bool(src.supports_login()) if src else False,
-            "logged_in": bool(cookie),
+            "logged_in": _cookie_ok(name, cookie),
             "session": None,
         }
         if mgr is not None:

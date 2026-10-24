@@ -180,23 +180,49 @@ class QrLoginSession:
 
 # ---------------- B站 ----------------
 
-class BilibiliQrSession(QrLoginSession):
-    """B站扫码登录（bilibili-api-python login_v2）。
+def _qr_data_url(text: str) -> str:
+    """把二维码内容渲染成 data URL（前端直接 <img src=...>）。"""
+    import qrcode
 
-    坑：① 登录 Cookie 是 JSON 字符串（cred.get_cookies() 序列化）；
-        ② Credential.from_cookies 需要 json.loads 后的 dict（在源侧处理）。
+    img = qrcode.make(text)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+
+
+class BilibiliQrSession(QrLoginSession):
+    """B站扫码登录（直连官方 passport web 二维码接口）。
+
+    为什么不用 bilibili_api 的 login_v2（2026-10-24 实测踩坑，必须记下来）：
+        `qr_login.get_credential()` 返回的 Credential 里 **SESSDATA/bili_jct/
+        DedeUserID 全是空字符串**，只有 ac_time_value 有值。我们当初把
+        `json.dumps(cred.get_cookies())` 存下来，看起来是一串非空 JSON，
+        于是「已登录」判断通过、界面显示登录成功，但弹幕连接 uid=0 → 匿名，
+        观众昵称全是星号（用户反馈：明明登录了还是匿名）。
+    现在改成直连官方接口，Cookie 从 Set-Cookie 与回调 URL 里取，
+    并且**校验 SESSDATA 非空**才算登录成功。
     """
 
     QR_TTL = 180
+    POLL_MIN_INTERVAL = 1.5
+
+    GEN_URL = "https://passport.bilibili.com/x/passport-login/web/qrcode/generate"
+    POLL_URL = "https://passport.bilibili.com/x/passport-login/web/qrcode/poll"
+    HEADERS = {
+        "User-Agent": _DEFAULT_UA,
+        "Referer": "https://www.bilibili.com/",
+    }
 
     async def start(self) -> None:
         try:
-            from bilibili_api.login_v2 import QrCodeLogin, QrCodeLoginChannel
-
-            self.qr_login = QrCodeLogin(platform=QrCodeLoginChannel.WEB)
-            await self.qr_login.generate_qrcode()
-            pic = self.qr_login.get_qrcode_picture()
-            self.qr = "data:image/png;base64," + base64.b64encode(pic.content).decode()
+            r = await self._get(self.GEN_URL, headers=self.HEADERS)
+            data = (r.json() or {}).get("data") or {}
+            url = str(data.get("url") or "")
+            key = str(data.get("qrcode_key") or "")
+            if not url or not key:
+                raise RuntimeError(f"接口没返回二维码（code={((r.json() or {}).get('code'))}）")
+            self.key = key
+            self.qr = _qr_data_url(url)
             self.status = "waiting"
             self.detail = "请使用哔哩哔哩 APP 扫码"
         except Exception as e:
@@ -209,23 +235,56 @@ class BilibiliQrSession(QrLoginSession):
         if self._check_expired():
             return self.result()
         try:
-            from bilibili_api.login_v2 import QrCodeLoginEvents
+            r = await self._get(
+                self.POLL_URL,
+                params={"qrcode_key": self.key, "source": "main-fe-header"},
+                headers=self.HEADERS,
+            )
+            body = r.json() or {}
+            data = body.get("data") or {}
+            code = data.get("code")
 
-            ev = await self.qr_login.check_state()
-            if ev == QrCodeLoginEvents.DONE:
-                cred = self.qr_login.get_credential()
-                # 存 JSON 字符串（from_cookies 需要 json.loads 后的 dict）
-                self.cookie = json.dumps(cred.get_cookies())
+            if code == 0:
+                cookies: dict[str, str] = {}
+                # ① Set-Cookie（官方就是把登录票据发在这里）
+                try:
+                    for c in r.cookies.jar:
+                        cookies[c.name] = c.value
+                except Exception:
+                    pass
+                # ② 回调 URL 的 query 里也带一份（跨域跳转场景）
+                try:
+                    from urllib.parse import parse_qs, urlparse
+
+                    q = parse_qs(urlparse(str(data.get("url") or "")).query)
+                    for k in ("SESSDATA", "bili_jct", "DedeUserID", "DedeUserID__ckMd5", "sid"):
+                        if k in q and not cookies.get(k):
+                            cookies[k] = q[k][0]
+                except Exception:
+                    pass
+
+                if not (cookies.get("SESSDATA") or "").strip():
+                    # 最坑的情况：接口说成功但没给票据 —— 宁可报错，也不要假装登录成功
+                    self.status = "error"
+                    self.detail = "登录接口没有返回 SESSDATA（B站风控或接口变更），请重新扫码"
+                    return self.result()
+
+                self.cookie = json.dumps(cookies, ensure_ascii=False)
                 self.status = "done"
-                self.detail = "登录成功"
-            elif ev == QrCodeLoginEvents.CONF:  # 86090 已扫码待确认
-                self.status = "scanned"
-                self.detail = "已扫码，请在手机上确认"
-            elif ev == QrCodeLoginEvents.TIMEOUT:
-                self.status = "expired"
-                self.detail = "二维码已过期"
-            else:  # SCAN 86101 未扫码
-                self.status = "waiting"
+                self.detail = f"登录成功（uid {cookies.get('DedeUserID') or '未知'}）"
+            elif code in (86101, 86090, 86038):
+                if code == 86090:
+                    self.status = "scanned"
+                    self.detail = "已扫码，请在手机上确认"
+                elif code == 86038:
+                    self.status = "expired"
+                    self.detail = "二维码已过期"
+                else:
+                    self.status = "waiting"
+                    self.detail = "等待扫码"
+            else:
+                self.status = "error"
+                self.detail = f"轮询返回异常 code={code} {data.get('message') or ''}".strip()
         except Exception as e:
             self.status = "error"
             self.detail = f"轮询失败: {e}"
