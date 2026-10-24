@@ -274,6 +274,15 @@ class AppState:
         return ""
 
     async def _start_listener(self, cfg: dict, cookie_override: Optional[str] = None):
+        # 防御：任何情况下都不允许“两个监听同时在跑”（那会让每条弹幕处理两次）
+        if self.listener is not None:
+            try:
+                log.warning("替换已有的弹幕监听（旧连接先停掉）")
+                await self.listener.stop()
+            except Exception as e:
+                log.warning("停止旧弹幕监听失败：%s", e)
+            self.listener = None
+
         dm = cfg.get("danmaku", {})
         mode = dm.get("mode", "mock")
         room_id = int(dm.get("room_id", 0) or 0)
@@ -745,11 +754,21 @@ async def api_health():
     else:
         dm_item = ("warn", f"直播间 {room} 正在连接…")
 
-    logged = bool(state.cfg.get("sources", {}).get("bilibili", {}).get("cookie"))
-    if not logged:
+    bili_cookie = state.cfg.get("sources", {}).get("bilibili", {}).get("cookie", "") or ""
+    login_uid = 0
+    if bili_cookie:
+        try:
+            from .danmaku import _cookie_from_credential, _cookie_uid
+
+            login_uid = _cookie_uid(_cookie_from_credential(bili_cookie))
+        except Exception:
+            login_uid = 0
+    if not bili_cookie:
         login_item = ("warn", "B站未登录：观众昵称会显示成星号，灯牌插队可能也认不出人")
+    elif not login_uid:
+        login_item = ("warn", "有 B站 Cookie 但缺少 DedeUserID：实际会按匿名连接，昵称还是星号——请重新扫码登录")
     else:
-        login_item = ("ok", "B站已登录（完整昵称 + 灯牌插队可用）")
+        login_item = ("ok", f"B站已登录（uid {login_uid}）：完整昵称 + 灯牌插队可用")
 
     active = [n for n in state.core.active_sources if n in state.sources]
     if active:

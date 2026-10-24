@@ -561,6 +561,8 @@ class DanmakuListener:
         self._closed = False
         self._watchdog_task: Optional[asyncio.Task] = None
         self._forced_reconnect = False
+        self._seen: dict[str, float] = {}   # 事件去重：key -> 最近一次到达时间
+        self._dup_count = 0                 # 累计压掉的重复事件数（诊断用）
 
     async def _emit_status(self) -> None:
         if self.on_status:
@@ -577,6 +579,7 @@ class DanmakuListener:
             "total_received": self.total_received,
             "live_status": self.live_status,
             "error": self.last_error,
+            "duplicates_dropped": self._dup_count,
         }
 
     async def _mark_connected(self) -> None:
@@ -668,8 +671,18 @@ class DanmakuListener:
                 self._session = BiliLiveWS(self.room_id, self._on_event, cookie=cookie)
                 self.status = "connecting"
                 await self._emit_status()
-                log.info("连接直播间 %s（第 %s 次尝试，%s）",
-                         self.room_id, attempt, "已登录" if cookie else "匿名")
+                uid = _cookie_uid(cookie)
+                if cookie and not uid:
+                    # 有 Cookie 但缺 DedeUserID：B站 会按匿名处理 → 观众昵称全是星号
+                    log.warning(
+                        "弹幕凭据里有 Cookie 却缺少 DedeUserID，B站会按匿名连接处理"
+                        "（表现：所有观众名字都是星号）——建议重新扫码登录 B站"
+                    )
+                log.info(
+                    "连接直播间 %s（第 %s 次尝试，%s）",
+                    self.room_id, attempt,
+                    f"已登录 uid={_cookie_uid(cookie)}" if cookie else "匿名（昵称会脱敏成星号）",
+                )
                 await self._session.run()
             except asyncio.CancelledError:
                 raise
@@ -714,11 +727,15 @@ class DanmakuListener:
             await self._refresh_live_status()
             return
         if cmd == "DANMU_MSG":
+            if self._is_duplicate("danmu", info):
+                return
             await self._handle(info)
             return
         if cmd == "SEND_GIFT":
             # 礼物事件：直播排队的灯牌插队依赖它
             await self._mark_connected()
+            if self._is_duplicate("gift", info):
+                return
             g = parse_gift_event(info)
             if g is not None and self.on_gift:
                 try:
@@ -729,6 +746,53 @@ class DanmakuListener:
         # 其他消息（进场/点赞/礼物等）也说明连接是健康的
         if cmd:
             await self._mark_connected()
+
+    #: 同一条事件在这么多秒内再次到达 → 判定重复（B站会重发，多连接也会各来一份）
+    _DEDUP_WINDOW = 10.0
+
+    def _is_duplicate(self, kind: str, info: dict) -> bool:
+        """按消息 id 去重：一次发送只处理一次。
+
+        为什么需要（2026-10-24 用户反馈）：主播明明只发了一条弹幕，
+        控制台「弹幕日志」里出现三条一模一样的，排队/灯牌也会被重复计数。
+        B站 在重连、或多条连接时会把同一条事件重复下发；这里按
+        「弹幕 id / 礼物 uid+id+ts」压掉，只保留第一次。
+        """
+        now = time.monotonic()
+        try:
+            seen = self._seen
+            if len(seen) > 2000:
+                for k, t in list(seen.items()):
+                    if now - t > self._DEDUP_WINDOW:
+                        seen.pop(k, None)
+            key = self._event_key(kind, info)
+            last = seen.get(key)
+            if last is not None and now - last <= self._DEDUP_WINDOW:
+                self._dup_count += 1
+                if self._dup_count <= 5 or self._dup_count % 100 == 0:
+                    log.info("忽略重复%s（10 秒内第 %s 次）", "礼物" if kind == "gift" else "弹幕", self._dup_count)
+                return True
+            seen[key] = now
+            return False
+        except Exception:
+            return False
+
+    @staticmethod
+    def _event_key(kind: str, info: dict) -> str:
+        data = info.get("data") if isinstance(info.get("data"), dict) else {}
+        if kind == "gift":
+            return "gift:{}:{}:{}:{}".format(
+                data.get("uid"), data.get("giftId") or data.get("giftName"),
+                data.get("timestamp"), data.get("num"),
+            )
+        try:
+            arr = info.get("info") or []
+            uid = arr[2][0]
+            text = arr[1]
+            dm_id = arr[0][5] if len(arr[0]) > 5 else ""
+            return f"danmu:{dm_id}" if dm_id else f"danmu:{uid}:{text}"
+        except Exception:
+            return f"danmu:raw:{id(info)}"
 
     async def _refresh_live_status(self) -> None:
         """查询直播间开播状态（0=未开播 1=直播中 2=轮播），用于 UI 提示。"""
