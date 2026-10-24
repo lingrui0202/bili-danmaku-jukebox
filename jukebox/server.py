@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import logging
 import os
 import time
 from contextlib import asynccontextmanager
@@ -15,16 +16,21 @@ from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+from . import __version__
 from .cache import CacheManager
 from .config import CONFIG_PATH, PROJECT_ROOT, app_data_dir, load_config
 from .core import JukeboxCore
-from .danmaku import Danmu, DanmakuListener
+from .danmaku import Danmu, DanmakuListener, check_room, describe_error, fetch_room_info
 from .live_queue import LiveQueue
+from .logging_setup import install_asyncio_handler, list_files as list_log_files, log_dir, log_file, read_tail
 from .models import Song, song_to_dict
 from .settings import SettingsStore
 from .sources import SOURCES
 
+log = logging.getLogger("jukebox.server")
+
 WEB_DIR = os.path.join(PROJECT_ROOT, "web")
+
 
 LOGIN_LABELS = {"bilibili": "B站", "qq": "QQ音乐", "kugou": "酷狗", "netease": "网易云"}
 
@@ -71,12 +77,17 @@ class AppState:
 
     # ---------- 启动 / 关闭 ----------
     async def startup(self):
+        install_asyncio_handler(asyncio.get_running_loop())
+        # uvicorn 会按 log_level 把 access 日志调回 INFO；OBS 页面每秒轮询会把日志刷爆，
+        # 这里统一压到 WARNING（5xx 仍会由 uvicorn.error 记录）
+        logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
         cache_dir = self.cfg["cache"]["dir"]
         if not os.path.isabs(cache_dir):
             cache_dir = os.path.join(app_data_dir(), cache_dir)
         self.cache = CacheManager(
             cache_dir, search_ttl=int(self.cfg["cache"]["search_ttl_minutes"]) * 60
         )
+        log.info("缓存目录：%s", cache_dir)
         # 「重启不保留登录态」开关：启动即清空持久化的平台 Cookie
         if not self.cfg.get("login", {}).get("keep_cookies", True):
             self.settings.clear_cookies()
@@ -90,6 +101,10 @@ class AppState:
             os.path.join(cache_dir, "live_queue.json"),
             on_change=self._live_queue_changed,
         )
+        log.info(
+            "排队模块就绪：%s 人 / 待用灯牌 %s 条 / 口令 %s",
+            len(self.live_queue.queue), len(self.live_queue.pending), self.live_queue.keywords,
+        )
 
         # 播放状态恢复 / 清理
         if self.cfg["jukebox"].get("keep_state_on_exit", True):
@@ -98,6 +113,7 @@ class AppState:
                 self.core.restore_state(data)
                 if not self.core.current and self.core.queue:
                     self.core.play_next()
+                log.info("已恢复播放状态：队列 %s 首", len(self.core.queue))
         else:
             self.cache.clear_state()
 
@@ -107,6 +123,8 @@ class AppState:
         )
         asyncio.create_task(self.core.tick_loop())
         asyncio.create_task(self._broadcast_state_loop())
+        log.info("服务启动完成（v%s）", __version__)
+
 
     async def shutdown(self):
         try:
@@ -170,30 +188,48 @@ class AppState:
             except Exception:
                 pass
 
-    def _reload_sources(self):
-        """按当前配置重建全部源实例（含未启用的，供控制台展示/热切换）。"""
+    def _reload_sources(self, drop_cookies=()):
+        """按当前配置重建全部源实例（含未启用的，供控制台展示/热切换）。
+
+        v1.1 修正：把旧实例里的 Cookie 带过来。关闭「重启后保留登录态」时
+        Cookie 只存在内存里，旧版每次改设置都会重建源 → 登录态被静默清掉
+        （表现为「扫码登录完，改个设置就又要重新登录」）。
+        drop_cookies 里的音源显式不带（退出登录用）。
+        """
+        old_cookies = {}
+        for name, src in (self.sources or {}).items():
+            if name in drop_cookies:
+                continue
+            try:
+                ck = getattr(src, "cookie", "") or ""
+            except Exception:
+                ck = ""
+            if ck:
+                old_cookies[name] = ck
         self.sources = {}
         for name, cls in SOURCES.items():
             try:
                 src_cfg = self.cfg.get("sources", {}).get(name, {}) or {}
                 src = cls(src_cfg)
-                cookie = src_cfg.get("cookie", "")
+                cookie = src_cfg.get("cookie", "") or old_cookies.get(name, "")
                 if cookie:
                     src.set_cookie(cookie)
                 self.sources[name] = src
             except Exception as e:
+                log.warning("音源 %s 初始化失败：%s", name, e)
                 print(f"[warn] 音源 {name} 初始化失败: {e}")
         if self.core is not None:
             self.core.sources = self.sources
 
+
     def reload_config(self):
         self.cfg = load_config(CONFIG_PATH, self.settings.data)
 
-    def apply_settings(self):
+    def apply_settings(self, drop_cookies=()):
         """设置变更后：重载 config -> core.apply_config -> 重建源 -> 广播。"""
         self.reload_config()
         self.core.apply_config(self.cfg)
-        self._reload_sources()
+        self._reload_sources(drop_cookies=drop_cookies)
         if self.live_queue is not None:
             self.live_queue.apply_config(self.cfg)
 
@@ -223,6 +259,25 @@ class AppState:
         # cookie_override 优先（登录时直接传入，覆盖 cfg；"" 表示显式匿名/退出登录）
         credential = self._bili_credential(cfg) if cookie_override is None else (cookie_override or "")
 
+        log.info(
+            "启动弹幕监听：mode=%s room_id=%s 凭据=%s",
+            mode, room_id, "已登录" if credential else "匿名",
+        )
+        if mode == "live" and room_id:
+            info = await fetch_room_info(room_id)
+            if info is None:
+                log.warning(
+                    "直播间 %s 查不到（B站没这个房间）：可能填成了主播 UID，"
+                    "请填 live.bilibili.com/ 后面的房间号", room_id,
+                )
+            else:
+                log.info(
+                    "直播间信息：room_id=%s 主播=%s 状态=%s 标题=%s",
+                    info["room_id"], info["anchor"] or f"uid{info['uid']}",
+                    {0: "未开播", 1: "直播中", 2: "轮播"}.get(info["live_status"], info["live_status"]),
+                    info["title"][:40],
+                )
+
         async def _on_status(st: dict):
             await self.ws.broadcast("danmaku_status", st)
 
@@ -235,6 +290,7 @@ class AppState:
             mock=(mode == "mock"),
         )
         await self.listener.start()
+
 
     async def _sync_danmaku_credential(self, cookie_override: Optional[str] = None):
         """B站登录态变化后，若弹幕在 live 模式，重连以套用新凭据（完整昵称 + uid）。
@@ -597,12 +653,62 @@ async def api_danmu_status():
     return lst.status_dict()
 
 
+# ---------------- 日志（v1.1：用户报障时直接把日志发过来） ----------------
+
+@app.get("/api/logs")
+async def api_logs(lines: int = 200, file: str = ""):
+    """日志位置 + 文件列表 + 末尾若干行（管理页「运行日志」用）。"""
+    try:
+        n = int(lines)
+    except Exception:
+        n = 200
+    n = max(10, min(n, 2000))
+    return {
+        "ok": True,
+        "version": __version__,
+        "dir": log_dir(),
+        "file": log_file(),
+        "files": list_log_files(),
+        "lines": read_tail(n, name=file or ""),
+    }
+
+
+@app.get("/api/logs/download")
+async def api_logs_download(file: str = ""):
+    """下载日志文件（默认当前 jukebox.log，也可指定 jukebox.log.1）。"""
+    name = os.path.basename(file or "jukebox.log") or "jukebox.log"
+    if not name.startswith("jukebox.log"):
+        name = "jukebox.log"
+    path = os.path.join(log_dir(), name)
+    if not log_dir() or not os.path.isfile(path):
+        return JSONResponse({"ok": False, "msg": "日志文件不存在"}, status_code=404)
+    log.info("管理页下载日志：%s", name)
+    return FileResponse(path, media_type="text/plain; charset=utf-8", filename=name)
+
+
+@app.post("/api/logs/open-folder")
+async def api_logs_open_folder():
+    """在资源管理器里打开日志目录（仅本机、Windows）。"""
+    directory = log_dir()
+    if not directory or not os.path.isdir(directory):
+        return {"ok": False, "msg": "日志目录不存在"}
+    try:
+        if os.name == "nt":
+            os.startfile(directory)  # type: ignore[attr-defined]
+            return {"ok": True, "msg": f"已打开：{directory}"}
+        return {"ok": False, "msg": directory}
+    except Exception as e:
+        return {"ok": False, "msg": f"打开失败：{e}（路径：{directory}）"}
+
+
+
 # ---------------- 设置 API ----------------
 
 @app.get("/api/settings")
 async def api_get_settings():
     return {
         "ok": True,
+        "version": __version__,
         "config": _public_config(state.cfg),
         "overlay": _sanitize_overlay(state.settings.data),
         "config_file": CONFIG_PATH,
@@ -618,6 +724,12 @@ async def api_post_settings(body: dict):
         return {"ok": False, "msg": "patch 必须是对象"}
     state.settings.patch(patch)
     state.apply_settings()
+    # 只记顶层键名与关键值，绝不把 Cookie 写进日志
+    changed = ", ".join(sorted(patch.keys()))
+    log.info("设置已更新：%s", changed or "(空)")
+    for key in ("danmaku", "live_queue", "jukebox"):
+        if key in patch and isinstance(patch[key], dict):
+            log.info("  设置 %s → %s", key, json.dumps(patch[key], ensure_ascii=False)[:300])
     await state.core.broadcast_state()
     return {"ok": True, "msg": "已保存并生效"}
 
@@ -625,7 +737,9 @@ async def api_post_settings(body: dict):
 @app.post("/api/settings/reset")
 async def api_reset_settings():
     state.settings.reset()
-    state.apply_settings()
+    # 恢复默认包含清掉登录态，所以内存里的 Cookie 也不能带过来
+    state.apply_settings(drop_cookies=tuple(LOGIN_LABELS.keys()))
+    log.info("设置已恢复默认（覆盖层已清空，登录态已清除）")
     await state.core.broadcast_state()
     return {"ok": True, "msg": "已恢复默认设置"}
 
@@ -644,8 +758,10 @@ async def api_login_start(body: dict):
         session = await mgr.start(source)
         if session is None:
             return {"ok": False, "msg": "无法创建登录会话"}
+        log.info("开始扫码登录：%s", LOGIN_LABELS.get(source, source))
         return {"ok": True, "session": session.result(with_qr=True)}
     except Exception as e:
+        log.warning("登录启动失败（%s）：%s", source, describe_error(e), exc_info=True)
         return {"ok": False, "msg": f"登录启动失败: {e}"}
 
 
@@ -660,6 +776,8 @@ async def api_login_status(body: dict):
         return {"ok": False, "msg": "没有进行中的登录会话"}
     st = await session.poll()
     if st.get("status") == "done" and st.get("cookie"):
+        log.info("扫码登录成功：%s（持久化=%s）", LOGIN_LABELS.get(source, source),
+                 bool(state.cfg.get("login", {}).get("keep_cookies", True)))
         # 「重启不保留登录态」关闭时：只热更新到内存，不写入 settings.json
         if state.cfg.get("login", {}).get("keep_cookies", True):
             state.settings.set_cookie(source, st["cookie"])
@@ -692,7 +810,8 @@ async def api_login_logout(body: dict):
     if source not in LOGIN_LABELS:
         return {"ok": False, "msg": "不支持的登录平台"}
     state.settings.set_cookie(source, "")
-    state.apply_settings()
+    state.apply_settings(drop_cookies=(source,))
+    log.info("退出登录：%s", LOGIN_LABELS.get(source, source))
     # 退出也要清掉内存源里的登录态（「重启不保留登录态」模式下 Cookie 只存在于内存源）
     src = state.sources.get(source)
     if src is not None:
@@ -781,7 +900,26 @@ async def api_danmaku_reconnect(body: dict):
     if new_mode == "live" and not new_room:
         return {"ok": False, "msg": "live 模式需要先填写直播间房间号"}
 
+    # 房间号校验（v1.1）：主播最常见的错法是把「主播 UID」当房间号，
+    # 旧版会照单全收 → 连接一直卡在「连接中」。这里提前拦下并说清楚。
+    if new_mode == "live" and new_room:
+        room_state, room_info = await check_room(int(new_room))
+        if room_state == "invalid":
+            log.warning("切换直播间被拒：%s 不是有效房间号", new_room)
+            return {
+                "ok": False,
+                "msg": f"B站查不到直播间 {new_room}：请填直播间地址 live.bilibili.com/ 后面的数字（不是主播 UID）",
+            }
+        if room_state == "ok" and room_info:
+            log.info(
+                "直播间校验通过：%s 主播=%s 状态=%s",
+                room_info["room_id"], room_info["anchor"] or f"uid{room_info['uid']}",
+                {0: "未开播", 1: "直播中", 2: "轮播"}.get(room_info["live_status"], room_info["live_status"]),
+            )
+
+    log.info("切换直播间：mode=%s room_id=%s", new_mode, new_room or 0)
     state.settings.patch({"danmaku": dm})
+
     state.reload_config()
     state.core.apply_config(state.cfg)
     # 停旧 listener -> 起新 listener
@@ -921,16 +1059,38 @@ async def api_stream(request: Request, source: str = "", id: str = ""):
     range_header = request.headers.get("range")
     if range_header:
         headers["Range"] = range_header
-    client = state.http or httpx.AsyncClient(follow_redirects=True)
-    req = client.build_request("GET", song.play_url, headers=headers)
-    resp = await client.send(req, stream=True)
+    client = state.http
+    own_client = False
+    if client is None:
+        # 兜底（正常不会发生）：临时客户端必须自己关，否则每次播放泄漏一个连接池
+        client = httpx.AsyncClient(follow_redirects=True)
+        own_client = True
+    try:
+        req = client.build_request("GET", song.play_url, headers=headers)
+        resp = await client.send(req, stream=True)
+    except Exception as e:
+        if own_client:
+            try:
+                await client.aclose()
+            except Exception:
+                pass
+        log.warning("拉取音频流失败：%s", describe_error(e))
+        return JSONResponse({"ok": False, "msg": f"拉取音频流失败：{e}"}, status_code=502)
 
     async def _gen():
         try:
             async for chunk in resp.aiter_bytes():
                 yield chunk
         finally:
-            await resp.aclose()
+            try:
+                await resp.aclose()
+            except Exception:
+                pass
+            if own_client:
+                try:
+                    await client.aclose()
+                except Exception:
+                    pass
 
     resp_headers = {}
     for h in ("content-type", "content-length", "content-range", "accept-ranges"):

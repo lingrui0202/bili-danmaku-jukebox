@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections import deque
 from typing import Any, Callable, Optional
@@ -11,6 +12,8 @@ from .cache import CacheManager
 from .danmaku import Danmu
 from .models import QueueItem, Song, queue_item_to_dict, song_from_dict
 from .sources import SongSource
+
+_filelog = logging.getLogger("jukebox.core")
 
 # 弹幕音源别名（SPEC 6.4）
 _SOURCE_ALIASES = {
@@ -89,6 +92,15 @@ class JukeboxCore:
     def _log(self, kind: str, msg: str, **extra) -> None:
         entry = {"kind": kind, "msg": msg, "ts": time.time(), **extra}
         self.danmu_log.appendleft(entry)
+        # 落盘：业务事件（点歌/排队/错误/系统提示）进 INFO；
+        # 每条弹幕本身只到 DEBUG，避免直播间刷屏把日志撑爆（v1.1）
+        try:
+            if kind == "danmu":
+                _filelog.debug("%s", msg)
+            else:
+                _filelog.info("[%s] %s", kind, msg)
+        except Exception:
+            pass
         # emit "danmu_log"（_log 是同步方法，用 create_task 异步广播）
         try:
             loop = asyncio.get_running_loop()
@@ -175,7 +187,8 @@ class JukeboxCore:
                 self.queue.append(self._item_from_dict(d))
             except Exception:
                 continue
-        for d in data.get("history") or []:
+        for d in reversed(data.get("history") or []):
+            # 保存时是 newest-first，运行期用 appendleft 恢复，逆序才能保持时间顺序
             try:
                 self.history.appendleft(self._item_from_dict(d))
             except Exception:
@@ -543,6 +556,9 @@ class JukeboxCore:
         if self.current:
             self.history.appendleft(self.current)
             self._song_last_played[self.current.song.key()] = time.time()
+            # 被顶掉的这首也算「这个人的歌播过一次」，否则轮询排序会一直给他优先
+            uid = self.current.requested_by_uid
+            self._user_play_count[uid] = self._user_play_count.get(uid, 0) + 1
         item = self.queue[index]
         del self.queue[index]
         self.current = item

@@ -21,3 +21,6 @@ release/
 # 编辑器/系统
 .playwright-cli/
 Thumbs.db
+
+# 本地临时文件（截图/构建日志/冒烟测试目录）
+.tmp/

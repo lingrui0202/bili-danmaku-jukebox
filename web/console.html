@@ -234,9 +234,10 @@
   <button class="nav-btn" data-tab="queue">&#128203; 队列榜单</button>
   <button class="nav-btn" data-tab="lq">&#127903; 直播排队</button>
   <button class="nav-btn" data-tab="log">&#128172; 弹幕日志</button>
+  <button class="nav-btn" data-tab="logs">&#128220; 运行日志</button>
   <button class="nav-btn" data-tab="sources">&#128268; 音源与登录</button>
   <button class="nav-btn" data-tab="settings">&#9881;&#65039; 设置</button>
-  <div class="foot">端口 <span id="foot-port">8788</span><br>配置仅写 settings.json</div>
+  <div class="foot">端口 <span id="foot-port">8788</span> · v<span id="foot-ver">1.1.0</span><br>配置仅写 settings.json</div>
 </nav>
 
 <div class="main">
@@ -346,6 +347,25 @@
     <div class="card">
       <h3>&#128172; 弹幕日志 <span class="sub">最近 100 条</span></h3>
       <div id="log-list"></div>
+    </div>
+  </div>
+
+  <!-- 运行日志（v1.1） -->
+  <div class="content" id="tab-logs">
+    <div class="card">
+      <h3>&#128220; 运行日志 <span class="sub">程序启动、弹幕连接、报错都记在这里</span></h3>
+      <div class="tip" style="margin-bottom:10px">
+        连不上直播间 / 闪退 / 播放异常时，点「下载日志」把这个文件发给作者，比截图有用得多。
+        日志里的 Cookie、token 已自动打码。
+      </div>
+      <div class="tip" id="logs-path" style="margin-bottom:10px;word-break:break-all">日志文件：--</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+        <button class="btn sm" onclick="loadLogs()">&#128260; 刷新</button>
+        <a class="btn sm ghost" id="logs-download" href="/api/logs/download" download>&#11015;&#65039; 下载日志</a>
+        <button class="btn sm ghost" onclick="openLogFolder()">&#128193; 打开日志文件夹</button>
+        <select id="logs-file" onchange="loadLogs(this.value)" style="display:none"></select>
+      </div>
+      <pre id="logs-body" style="max-height:60vh;overflow:auto;background:rgba(0,0,0,.28);border-radius:10px;padding:12px;font-size:12px;line-height:1.55;white-space:pre-wrap;word-break:break-all">（加载中…）</pre>
     </div>
   </div>
 
@@ -551,7 +571,7 @@
   var lyricTimer = null, lyricLines = [], lyricSong = null;
 
   var $ = function (id) { return document.getElementById(id); };
-  var TAB_TITLES = { play: "正在播放", request: "点歌台", queue: "队列榜单", lq: "直播排队", log: "弹幕日志", sources: "音源与登录", settings: "设置" };
+  var TAB_TITLES = { play: "正在播放", request: "点歌台", queue: "队列榜单", lq: "直播排队", log: "弹幕日志", logs: "运行日志", sources: "音源与登录", settings: "设置" };
 
   function fmt(s) {
     s = Math.max(0, Math.floor(s || 0));
@@ -586,8 +606,45 @@
       $("tab-" + btn.dataset.tab).classList.add("active");
       $("tab-title").textContent = TAB_TITLES[btn.dataset.tab] || "";
       if (btn.dataset.tab === "sources") sourceSig = "";
+      if (btn.dataset.tab === "logs") loadLogs();
+      // 便于直接分享/收藏某个标签页，例如 .../console.html#logs
+      try { history.replaceState(null, "", "#" + btn.dataset.tab); } catch (e) {}
     });
   });
+  (function () {
+    var t = (location.hash || "").replace("#", "");
+    if (t && TAB_TITLES[t]) goTab(t);
+  })();
+
+  /* ---------- 运行日志（v1.1） ---------- */
+  var logsLoaded = false;
+  function loadLogs(file) {
+    var url = "/api/logs?lines=400" + (file ? "&file=" + encodeURIComponent(file) : "");
+    fetch(url).then(function (r) { return r.json(); }).then(function (d) {
+      if (!d.ok) return;
+      $("logs-path").textContent = "日志文件：" + (d.file || d.dir || "--");
+      if (d.version) $("foot-ver").textContent = d.version;
+      var el = $("logs-body");
+      el.textContent = (d.lines && d.lines.length) ? d.lines.join("\n") : "（还没有日志，跑一会儿再来）";
+      el.scrollTop = el.scrollHeight;
+      // 有滚动文件时给一个下拉切换
+      var sel = $("logs-file");
+      if (d.files && d.files.length > 1) {
+        sel.style.display = "";
+        sel.innerHTML = d.files.map(function (f) {
+          return '<option value="' + esc(f.name) + '"' + (file === f.name ? " selected" : "") + ">" +
+            esc(f.name) + " · " + Math.round(f.size / 1024) + "KB · " + esc(f.modified) + "</option>";
+        }).join("");
+      }
+      logsLoaded = true;
+    }).catch(function () {
+      $("logs-body").textContent = "读取日志失败：服务可能刚重启，稍后点「刷新」";
+    });
+  }
+  window.loadLogs = loadLogs;
+  window.openLogFolder = function () {
+    api("/api/logs/open-folder", {}).then(function (d) { toast(d.msg || (d.ok ? "已打开日志文件夹" : "打开失败")); });
+  };
 
   /* ---------- WebSocket ---------- */
   function connectWs() {
@@ -1242,6 +1299,7 @@
   fetch("/api/settings").then(function (r) { return r.json(); }).then(function (d) {
     if (d.ok) {
       $("foot-port").textContent = d.port;
+      if (d.version) $("foot-ver").textContent = d.version;
       var dm = (d.config && d.config.danmaku) || {};
       $("set-mode").value = dm.mode || "mock";
       $("set-room").value = dm.room_id || "";

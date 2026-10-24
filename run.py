@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 import time
@@ -12,6 +13,14 @@ import traceback
 
 # 确保项目根在 sys.path 中
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from jukebox import __version__  # noqa: E402
+from jukebox.logging_setup import install_exception_hooks, setup as setup_logging  # noqa: E402
+
+# 日志必须最先装好：后面任何一步失败都要在文件里留下痕迹（v1.1 起）
+LOG_PATH = setup_logging()
+install_exception_hooks()
+log = logging.getLogger("jukebox.run")
 
 
 def _install_console_handler() -> None:
@@ -128,12 +137,13 @@ def _install_parent_watchdog() -> None:
 
 def _banner(port: int, mode: str) -> None:
     print("=" * 56)
-    print("  B站弹幕点歌机 + 直播排队  (bili-danmaku-jukebox)")
+    print(f"  B站弹幕点歌机 + 直播排队  (bili-danmaku-jukebox) v{__version__}")
     print(f"  管理控制台 : http://127.0.0.1:{port}/web/console.html")
     print(f"  OBS 播放页 : http://127.0.0.1:{port}/obs")
     print(f"  OBS 歌词页 : http://127.0.0.1:{port}/stage")
     print(f"  OBS 排队页 : http://127.0.0.1:{port}/queue")
     print(f"  弹幕模式   : {mode}")
+    print(f"  运行日志   : {LOG_PATH}")
     print("  按 Ctrl+C 停止服务")
     print("=" * 56)
 
@@ -230,36 +240,68 @@ def main() -> None:
 
     import uvicorn
 
-    from jukebox.config import load_config, CONFIG_PATH
+    from jukebox.config import app_data_dir, load_config, CONFIG_PATH
     from jukebox.server import app
     from jukebox.settings import SettingsStore
+
+    log.info("启动 bili-jukebox v%s（frozen=%s）", __version__, bool(getattr(sys, "frozen", False)))
+    log.info("数据目录：%s", app_data_dir())
+    log.info("配置文件：%s", CONFIG_PATH)
 
     settings = SettingsStore()
     cfg = load_config(CONFIG_PATH, settings.data)
 
     host = cfg["server"]["host"]
     base_port = int(cfg["server"]["port"])
+    dm = cfg.get("danmaku", {})
+    log.info(
+        "弹幕配置：mode=%s room_id=%s host=%s port=%s",
+        dm.get("mode"), dm.get("room_id"), host, base_port,
+    )
 
     if not _acquire_single_instance():
         if not _open_running_instance(base_port):
             print("[warn] 程序已有实例在运行（未找到其端口），本次启动已取消。")
+            log.warning("已有实例在运行且未探测到端口，本次启动取消")
         return
 
     port = base_port
     while port < base_port + 20:
         if _port_free(port):
             _banner(port, cfg["danmaku"]["mode"])
+            log.info("服务地址：http://%s:%s/web/console.html", host, port)
             if cfg["server"].get("open_browser", True):
                 _open_console(port)
             try:
-                # 直接传 app 对象，便于 PyInstaller 静态分析收集依赖
-                uvicorn.run(app, host=host, port=port, log_level="info")
+                # 直接传 app 对象，便于 PyInstaller 静态分析收集依赖。
+                # log_config=None：不替换 logging 配置，让 uvicorn 的日志流进
+                # logging_setup 装好的控制台 + 文件两个 handler（v1.1）。
+                uvicorn.run(app, host=host, port=port, log_level="info", log_config=None)
             except KeyboardInterrupt:
                 pass
+            finally:
+                log.info("服务已停止")
             return
         print(f"[warn] 端口 {port} 被占用，自动尝试 {port + 1}")
+        log.warning("端口 %s 被占用，尝试下一个", port)
         port += 1
     print("[error] 端口 8788~8799 均被占用，无法启动服务。请关闭占用端口的程序后重试。")
+    log.error("端口 %s~%s 均被占用，启动失败", base_port, base_port + 19)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception:
+        # 关键：任何启动异常都不要静默退出，
+        # 否则双击 exe 时控制台一闪而过，用户看不到错误。
+        log.critical("启动失败", exc_info=True)
+        traceback.print_exc()
+        try:
+            print(f"\n日志已写入：{LOG_PATH}")
+            input("\n程序异常退出，请截图上面的报错，然后按 Enter 关闭窗口...")
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
