@@ -52,6 +52,11 @@
 
 - 侧栏显示版本号；支持用 `…/web/console.html#logs` 直接打开某个标签页。
 
+**分发/运行环境（2026-10-24 实测撞上）**
+
+- 新 exe 没签名，首次双击必被 SmartScreen 拦（程序还没启动，不是卡死）：「更多信息 → 仍要运行」；包内附 `启动.bat` 可自动 `Unblock-File` 后启动。
+- 若报 `[PYI-####:ERROR] Could not create temporary directory!`：exe 所在目录带了 **Low 完整性标签**（DSH 工作区/某些沙箱会给整棵子树打 Low），低完整性进程写不了 `%TEMP%`。挪到普通目录（如 `D:\bili-jukebox\`）即可；或 `icacls "<目录>" /setintegritylevel (OI)(CI)M /T /C` 恢复成 Medium。
+
 ### v1.0.0（2026-10-19）
 
 首个公开版本：点歌 + 排队合流、四平台音源、扫码登录、OBS 三页面、单文件 exe。
