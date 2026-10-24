@@ -770,6 +770,18 @@ async def api_health():
         {"key": "音源", "level": src_item[0], "text": src_item[1]},
         {"key": "OBS 地址", "level": obs_item[0], "text": obs_item[1]},
     ]
+
+    # 程序自身状态：OBS 一片空白时，先确认「它到底在不在、在哪个端口、上次退得干不干净」
+    pid = RUNTIME.get("pid") or "-"
+    last_ok = RUNTIME.get("last_exit_ok", True)
+    proc_text = f"正在运行（PID {pid}，端口 {port}）"
+    if not last_ok:
+        proc_text += "；上次没有正常退出（崩溃或被强杀），这一次是新起的"
+    items.append({
+        "key": "程序状态",
+        "level": "ok" if last_ok else "warn",
+        "text": proc_text,
+    })
     return {
         "ok": True,
         "version": __version__,
@@ -820,6 +832,8 @@ async def api_diagnostics():
                 "platform": platform.platform(),
                 "executable": sys.executable,
                 "data_dir": app_data_dir(),
+                "pid": RUNTIME.get("pid"),
+                "last_exit_ok": RUNTIME.get("last_exit_ok"),
                 "port": _base_url(),
                 "urls": _urls(),
                 "danmaku": state.listener.status_dict() if state.listener else None,

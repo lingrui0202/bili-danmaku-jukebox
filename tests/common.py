@@ -67,9 +67,12 @@ def start_server() -> subprocess.Popen:
     """启动服务并等待就绪。"""
     kill_port()
     logf = open(LOG, "a", encoding="utf-8")
+    env = dict(os.environ)
+    env["JB_NO_GUI"] = "1"  # 测试环境不弹系统框、不等回车
     proc = subprocess.Popen(
         [sys.executable, "run.py"],
         cwd=ROOT,
+        env=env,
         stdout=logf,
         stderr=subprocess.STDOUT,
         creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,

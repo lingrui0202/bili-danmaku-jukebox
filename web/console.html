@@ -254,7 +254,7 @@
     <div class="card" id="health-card">
       <h3>&#129658; 启动体检 <span class="sub" id="health-sum">检查中…</span></h3>
       <div id="health-list"></div>
-      <div class="tip" style="margin-top:8px">四项都绿了，直播间的弹幕才会正常进来。点对应标签页去改。</div>
+      <div class="tip" style="margin-top:8px">上面都绿了，直播间的弹幕和 OBS 画面才会正常。黄/红就点对应标签页去改。</div>
     </div>
     <div class="card">
       <h3>&#127925; 正在播放 <span class="sub" id="np-total"></span></h3>
@@ -685,7 +685,7 @@
     }).join("");
     var sum = $("health-sum");
     if (sum) {
-      sum.textContent = d.worst === "ok" ? "四项全部正常" :
+      sum.textContent = d.worst === "ok" ? "全部正常" :
         (d.worst === "error" ? "有问题，先处理红点" : "有提醒，建议看一下");
     }
   }

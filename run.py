@@ -23,6 +23,98 @@ install_exception_hooks()
 log = logging.getLogger("jukebox.run")
 
 
+def _interactive() -> bool:
+    """当前是否有真人看着控制台：重定向/自动化时不要弹框、不要等回车。"""
+    if os.environ.get("JB_NO_GUI"):
+        return False
+    try:
+        return bool(sys.stdout.isatty())
+    except Exception:
+        return False
+
+
+def _fatal_box(title: str, text: str) -> None:
+    """弹一个 Windows 系统消息框。
+
+    为什么需要：主播是双击 exe 用的，出错时黑窗口经常还没看清就被关了
+    （或者他根本不看），于是「用不了」永远没线索。异常路径必须弹出来。
+    JB_NO_GUI=1 时不弹（自动化测试 / 无人值守用）。
+    """
+    if sys.platform != "win32" or not _interactive():
+        return
+    try:
+        import ctypes
+
+        MB_OK, MB_ICONERROR, MB_TOPMOST = 0x0, 0x10, 0x40000
+        ctypes.windll.user32.MessageBoxW(
+            None, text, title, MB_OK | MB_ICONERROR | MB_TOPMOST
+        )
+    except Exception:
+        pass
+
+
+def _wait_enter(tip: str = "\n按 Enter 关闭窗口...") -> None:
+    """出错后停住窗口；JB_NO_GUI=1 时不停（避免卡住自动化）。"""
+    if os.environ.get("JB_NO_GUI"):
+        return
+    try:
+        input(tip)
+    except Exception:
+        pass
+
+
+def _running_marker() -> str:
+    try:
+        from jukebox.config import app_data_dir
+
+        return os.path.join(app_data_dir(), "cache", ".running")
+    except Exception:
+        return ""
+
+
+def _previous_run_ok() -> bool:
+    """上次是否正常退出：marker 还在 = 崩了 / 被强杀 / 直接关窗口。"""
+    path = _running_marker()
+    try:
+        return not (path and os.path.exists(path))
+    except Exception:
+        return True
+
+
+def _mark_running() -> None:
+    path = _running_marker()
+    if not path:
+        return
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(f"{os.getpid()}\n{time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+    except Exception:
+        pass
+
+
+def _clear_running() -> None:
+    path = _running_marker()
+    try:
+        if path and os.path.exists(path):
+            os.remove(path)
+    except Exception:
+        pass
+
+
+def _set_title(text: str) -> None:
+    """把端口写进窗口标题：OBS 空白时，第一眼就能看出程序起在哪个端口。"""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+
+        ctypes.windll.kernel32.SetConsoleTitleW(text)
+    except Exception:
+        pass
+
+
+
 def _install_console_handler() -> None:
     """关掉命令行窗口（或 Ctrl+C）时确保进程一定退出，避免残留。
 
@@ -41,6 +133,10 @@ def _install_console_handler() -> None:
         def _handler(event: int) -> bool:
             # 0=CTRL_C_EVENT, 2=CTRL_CLOSE_EVENT（关窗口）, 5=注销, 6=关机
             if event in (0, 2, 5, 6):
+                try:
+                    _clear_running()  # 正常关窗不算异常退出，别下次启动吓人
+                except Exception:
+                    pass
                 try:
                     os._exit(0)
                 except Exception:
@@ -283,20 +379,39 @@ _MUTEX_HANDLE = None
 
 
 def _acquire_single_instance() -> bool:
-    """命名互斥锁：防止重复启动（两个实例会共用 cache、重复入队、重复播放）。"""
+    """命名互斥锁：防止重复启动（两个实例会共用 cache、重复入队、重复播放）。
+
+    实现上**不用 GetLastError 判断 183**：实测同一个进程里，
+    `CreateMutexW` 拿到句柄 504、而 `ctypes.get_last_error()` 读出来是 0
+    （另一个独立脚本同样调用却正确读到 183），结果就是重复启动被放行，
+    两个实例抢 8788、抢 cache —— 表现正是「第二次打开就怪怪的」。
+    改成先用 `OpenMutexW` 探测：能打开就是已经有人在跑。
+    """
     if sys.platform != "win32":
         return True
     global _MUTEX_HANDLE
     try:
         import ctypes
+        from ctypes import wintypes
 
-        kernel32 = ctypes.windll.kernel32  # type: ignore
-        handle = kernel32.CreateMutexW(None, False, "Local\\bili-jukebox-single-instance")
+        kernel32 = ctypes.WinDLL("kernel32")
+        kernel32.OpenMutexW.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.LPCWSTR]
+        kernel32.OpenMutexW.restype = wintypes.HANDLE
+        kernel32.CreateMutexW.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR]
+        kernel32.CreateMutexW.restype = wintypes.HANDLE
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+
+        SYNC = 0x00100000
+        name = "Local\bili-jukebox-single-instance"
+
+        existing = kernel32.OpenMutexW(SYNC, False, name)
+        if existing:
+            kernel32.CloseHandle(existing)
+            return False
+
+        handle = kernel32.CreateMutexW(None, False, name)
         if not handle:
             return True  # 拿不到锁句柄时不阻断启动
-        if kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
-            kernel32.CloseHandle(handle)
-            return False
         _MUTEX_HANDLE = handle  # 进程存活期间一直持有
         return True
     except Exception:
@@ -347,10 +462,24 @@ def main() -> None:
         dm.get("mode"), dm.get("room_id"), host, base_port,
     )
 
+    last_ok = _previous_run_ok()
+    if not last_ok:
+        log.warning("上次没有正常退出（崩溃或被强杀），本次是新起的")
+    server_module.RUNTIME["last_exit_ok"] = last_ok
+    server_module.RUNTIME["pid"] = os.getpid()
+
     if not _acquire_single_instance():
         if not _open_running_instance(base_port):
-            print("[warn] 程序已有实例在运行（未找到其端口），本次启动已取消。")
-            log.warning("已有实例在运行且未探测到端口，本次启动取消")
+            msg = (
+                "程序好像已经在运行，但找不到它的管理页面（8788~8807 都没响应）。\n\n"
+                "最常见的原因：上一个进程没退干净，卡住了。\n"
+                "处理：打开任务管理器 → 详细信息 → 把所有 bili-jukebox.exe 结束掉，再重新双击。\n\n"
+                f"日志文件：{LOG_PATH}"
+            )
+            print(msg)
+            log.error("单实例锁被占用，但 8788~8807 全部无响应：疑似上次的残留进程")
+            _fatal_box("点歌机没启动：有残留进程", msg)
+            _wait_enter()
         return
 
     port = base_port
@@ -359,6 +488,8 @@ def main() -> None:
             # 告诉服务层「真正用的端口」：端口顺延后控制台/OBS 地址才不会给错
             server_module.RUNTIME["port"] = port
             server_module.RUNTIME["host"] = host
+            _set_title(f"B站弹幕点歌机 v{__version__} · 端口 {port}")
+            _mark_running()
             _banner(port, cfg["danmaku"]["mode"])
             log.info("服务地址：http://%s:%s/web/console.html", host, port)
             if cfg["server"].get("open_browser", True):
@@ -371,13 +502,20 @@ def main() -> None:
             except KeyboardInterrupt:
                 pass
             finally:
+                _clear_running()
                 log.info("服务已停止")
             return
         print(f"[warn] 端口 {port} 被占用，自动尝试 {port + 1}")
         log.warning("端口 %s 被占用，尝试下一个", port)
         port += 1
-    print("[error] 端口 8788~8799 均被占用，无法启动服务。请关闭占用端口的程序后重试。")
+    msg = (
+        f"端口 {base_port}~{base_port + 19} 全被占用了，服务起不来。\n\n"
+        "OBS 里会是一片空白。请关掉占用端口的程序（常见是上次没退干净的自己）后重试。\n\n"
+        f"日志文件：{LOG_PATH}"
+    )
+    print("[error] " + msg)
     log.error("端口 %s~%s 均被占用，启动失败", base_port, base_port + 19)
+    _fatal_box("点歌机启动失败：端口被占满", msg)
 
 
 if __name__ == "__main__":
@@ -390,20 +528,13 @@ if __name__ == "__main__":
         traceback.print_exc()
         try:
             print(f"\n日志已写入：{LOG_PATH}")
-            input("\n程序异常退出，请截图上面的报错，然后按 Enter 关闭窗口...")
         except Exception:
             pass
-
-
-if __name__ == "__main__":
-    try:
-        main()
-    except Exception:
-        # 关键：任何启动异常都不要静默退出，
-        # 否则双击 exe 时控制台一闪而过，用户看不到错误。
-        traceback.print_exc()
-        try:
-            input("\n程序异常退出，请截图上面的报错，然后按 Enter 关闭窗口...")
-        except Exception:
-            pass
+        _fatal_box(
+            "点歌机启动失败",
+            f"程序启动时出错，已经把详细原因写进日志：\n{LOG_PATH}\n\n"
+            f"请把这个日志文件发给我（或在控制台「运行日志 → 导出诊断包」）。\n\n"
+            f"{traceback.format_exc()[-800:]}",
+        )
+        _wait_enter()
 
