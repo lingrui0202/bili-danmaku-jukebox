@@ -148,13 +148,41 @@ def _banner(port: int, mode: str) -> None:
     print("=" * 56)
 
 
+def _is_elevated() -> bool:
+    """当前进程是否以管理员（提升权限）身份运行。"""
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return False
+
+
 def _open_console(port: int) -> None:
-    """服务起来后自动打开管理页（后台等待端口就绪再开，避免抢跑白屏）。"""
+    """服务起来后自动打开管理页（后台等待端口就绪再开，避免抢跑白屏）。
+
+    v1.1：以管理员身份运行时**不自动开浏览器**。
+    管理员进程去拉起 Edge/Chrome 会撞上「现有实例正在以提升的权限运行，
+    是否用普通权限重启」的弹窗（用户还得点一次，甚至以为程序卡住）。
+    这时只打印地址，让用户自己在普通浏览器里打开即可。
+    """
     import threading
     import urllib.request
     import webbrowser
 
     url = f"http://127.0.0.1:{port}/web/console.html"
+
+    if _is_elevated():
+        msg = (
+            f"[提示] 当前以管理员权限运行，已跳过自动打开浏览器"
+            f"（否则 Edge/Chrome 会弹「提升权限实例」的冲突框）。\n"
+            f"       请手动在浏览器打开：{url}"
+        )
+        print(msg)
+        log.info("以管理员权限运行：跳过自动打开浏览器，请手动访问 %s", url)
+        return
 
     def _run():
         for _ in range(30):
@@ -166,8 +194,8 @@ def _open_console(port: int) -> None:
                 time.sleep(0.5)
         try:
             webbrowser.open(url, new=1, autoraise=True)
-        except Exception:
-            pass
+        except Exception as e:
+            log.info("自动打开浏览器失败（%s），请手动访问 %s", e, url)
 
     threading.Thread(target=_run, daemon=True).start()
 
