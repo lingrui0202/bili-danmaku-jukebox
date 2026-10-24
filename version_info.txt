@@ -1,7 +1,7 @@
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(1, 1, 5, 0),
-    prodvers=(1, 1, 5, 0),
+    filevers=(1, 1, 6, 0),
+    prodvers=(1, 1, 6, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -14,12 +14,12 @@ VSVersionInfo(
       StringTable('080404B0', [
         StringStruct('CompanyName', 'bili-danmaku-jukebox'),
         StringStruct('FileDescription', 'B站弹幕点歌机 + 直播排队'),
-        StringStruct('FileVersion', '1.1.5'),
+        StringStruct('FileVersion', '1.1.6'),
         StringStruct('InternalName', 'bili-jukebox'),
         StringStruct('LegalCopyright', 'github.com/lingrui0202/bili-danmaku-jukebox'),
         StringStruct('OriginalFilename', 'bili-jukebox.exe'),
         StringStruct('ProductName', 'B站弹幕点歌机'),
-        StringStruct('ProductVersion', '1.1.5')
+        StringStruct('ProductVersion', '1.1.6')
       ])
     ]),
     VarFileInfo([VarStruct('Translation', [2052, 1200])])

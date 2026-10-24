@@ -95,6 +95,8 @@ class AppState:
         self.listener: Optional[DanmakuListener] = None
         self.live_queue: Optional[LiveQueue] = None  # 直播排队（与点歌共用弹幕/登录）
         self.login_mgr = None  # logins.LoginManager（阶段6 懒加载）
+        self._listener_lock = asyncio.Lock()   # 保证任何时刻只有一个弹幕监听
+        self._last_listener_key = None          # (mode, room_id, credential)
 
     # ---------- 启动 / 关闭 ----------
     async def startup(self):
@@ -273,53 +275,73 @@ class AppState:
                 pass
         return ""
 
-    async def _start_listener(self, cfg: dict, cookie_override: Optional[str] = None):
-        # 防御：任何情况下都不允许“两个监听同时在跑”（那会让每条弹幕处理两次）
-        if self.listener is not None:
-            try:
-                log.warning("替换已有的弹幕监听（旧连接先停掉）")
-                await self.listener.stop()
-            except Exception as e:
-                log.warning("停止旧弹幕监听失败：%s", e)
-            self.listener = None
+    async def _start_listener(
+        self, cfg: dict, cookie_override: Optional[str] = None, force: bool = False
+    ):
+        """创建（或替换）弹幕监听。**全程持锁**，保证任何时刻只有一个监听在跑。
 
+        v1.1.6 修的真 bug：控制台在扫码时会高频轮询 `/api/login/status`，
+        扫码成功那一刻，同时在途的几个请求都会走到「登录成功 → 用新凭据重连」，
+        于是并发起了 5~6 个监听（日志里能看到同一秒 6 次「连接直播间…第 1 次尝试」）。
+        每条弹幕被 6 个连接各收一份 → 用户「只发了一条，日志里六条」。
+        现在：① 重连走 asyncio.Lock 串行；② 配置+凭据没变就跳过重复重连；
+        ③ 退出锁之前确保 self.listener 指向的就是刚起来的那个。
+        """
         dm = cfg.get("danmaku", {})
         mode = dm.get("mode", "mock")
         room_id = int(dm.get("room_id", 0) or 0)
         # cookie_override 优先（登录时直接传入，覆盖 cfg；"" 表示显式匿名/退出登录）
         credential = self._bili_credential(cfg) if cookie_override is None else (cookie_override or "")
+        key = (mode, room_id, credential)
 
-        log.info(
-            "启动弹幕监听：mode=%s room_id=%s 凭据=%s",
-            mode, room_id, "已登录" if credential else "匿名",
-        )
-        if mode == "live" and room_id:
-            info = await fetch_room_info(room_id)
-            if info is None:
-                log.warning(
-                    "直播间 %s 查不到（B站没这个房间）：可能填成了主播 UID，"
-                    "请填 live.bilibili.com/ 后面的房间号", room_id,
-                )
-            else:
-                log.info(
-                    "直播间信息：room_id=%s 主播=%s 状态=%s 标题=%s",
-                    info["room_id"], info["anchor"] or f"uid{info['uid']}",
-                    {0: "未开播", 1: "直播中", 2: "轮播"}.get(info["live_status"], info["live_status"]),
-                    info["title"][:40],
-                )
+        async with self._listener_lock:
+            if not force and self.listener is not None and key == self._last_listener_key:
+                log.info("弹幕监听已在用同一份配置/凭据，跳过重复重连（mode=%s room=%s）", mode, room_id)
+                return
+            if self.listener is not None:
+                try:
+                    log.info("替换已有的弹幕监听（旧连接先停掉）")
+                    await self.listener.stop()
+                except Exception as e:
+                    log.warning("停止旧弹幕监听失败：%s", e)
+                self.listener = None
+                # stop() 是异步收尾，给事件循环一拍，确保旧 socket 真的关掉
+                await asyncio.sleep(0)
 
-        async def _on_status(st: dict):
-            await self.ws.broadcast("danmaku_status", st)
+            log.info(
+                "启动弹幕监听：mode=%s room_id=%s 凭据=%s",
+                mode, room_id, "已登录" if credential else "匿名",
+            )
+            if mode == "live" and room_id:
+                info = await fetch_room_info(room_id)
+                if info is None:
+                    log.warning(
+                        "直播间 %s 查不到（B站没这个房间）：可能填成了主播 UID，"
+                        "请填 live.bilibili.com/ 后面的房间号", room_id,
+                    )
+                else:
+                    log.info(
+                        "直播间信息：room_id=%s 主播=%s 状态=%s 标题=%s",
+                        info["room_id"], info["anchor"] or f"uid{info['uid']}",
+                        {0: "未开播", 1: "直播中", 2: "轮播"}.get(info["live_status"], info["live_status"]),
+                        info["title"][:40],
+                    )
 
-        self.listener = DanmakuListener(
-            room_id=room_id,
-            on_danmu=self.handle_danmu_shared,
-            on_gift=self.handle_gift_shared,
-            on_status=_on_status,
-            credential=credential,
-            mock=(mode == "mock"),
-        )
-        await self.listener.start()
+            async def _on_status(st: dict):
+                await self.ws.broadcast("danmaku_status", st)
+
+            listener = DanmakuListener(
+                room_id=room_id,
+                on_danmu=self.handle_danmu_shared,
+                on_gift=self.handle_gift_shared,
+                on_status=_on_status,
+                credential=credential,
+                mock=(mode == "mock"),
+            )
+            await listener.start()
+            self.listener = listener
+            self._last_listener_key = key
+            log.info("弹幕监听已就绪（mode=%s room=%s）", mode, room_id)
 
 
     async def _sync_danmaku_credential(self, cookie_override: Optional[str] = None):
@@ -333,11 +355,8 @@ class AppState:
         """
         lis = getattr(self, "listener", None)
         if lis is None or getattr(lis, "mock", True) or not getattr(lis, "room_id", 0):
+            log.info("当前不在 live 模式，登录凭据留到下次切换直播间时生效")
             return
-        try:
-            await lis.stop()
-        except Exception:
-            pass
         self.reload_config()
         await self._start_listener(self.cfg, cookie_override=cookie_override)
         await self.ws.broadcast("danmaku_status", self.listener.status_dict())
@@ -1014,6 +1033,10 @@ async def api_login_status(body: dict):
         return {"ok": False, "msg": "没有进行中的登录会话"}
     st = await session.poll()
     if st.get("status") == "done" and st.get("cookie"):
+        # 控制台会连续轮询：同一次登录只处理一遍（保存 Cookie / 重连弹幕）
+        if getattr(session, "_consumed", False):
+            return {"ok": True, "session": session.result(with_qr=True), "logged_in": True}
+        session._consumed = True
         log.info("扫码登录成功：%s（持久化=%s）", LOGIN_LABELS.get(source, source),
                  bool(state.cfg.get("login", {}).get("keep_cookies", True)))
         # 「重启不保留登录态」关闭时：只热更新到内存，不写入 settings.json
@@ -1166,7 +1189,7 @@ async def api_danmaku_reconnect(body: dict):
             await state.listener.stop()
         except Exception:
             pass
-    await state._start_listener(state.cfg)
+    await state._start_listener(state.cfg, force=True)
     await state.ws.broadcast("danmaku_status", state.listener.status_dict())
     return {"ok": True, "msg": f"已切换到 {new_mode} 模式（房间号 {new_room or '无'}）"}
 
